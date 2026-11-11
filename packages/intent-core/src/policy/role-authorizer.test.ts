@@ -63,3 +63,15 @@ test.each<[string, Principal, AnyDescriptor, string]>([
     failure: { stage: 'policy', code, retryable: false },
   });
 });
+
+test('only the active role counts: waiter active, host granted, host-only descriptor → UNAUTHORIZED', async () => {
+  const decision = await authorizer.authorize(
+    { active: 'waiter', granted: ['waiter', 'host'] },
+    { ...descriptor, roles: ['host'] },
+    { signal },
+  );
+  expect(decision).toEqual({
+    allowed: false,
+    failure: { stage: 'policy', code: 'UNAUTHORIZED', retryable: false },
+  });
+});

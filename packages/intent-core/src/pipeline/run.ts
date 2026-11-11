@@ -102,6 +102,9 @@ const runStage = async <TState, TResult>(
     if (timedOut) {
       return fail(stage.budget?.onTimeout ?? abortFailure(stage.phase));
     }
+    if (root.aborted) {
+      return fail(abortFailure(stage.phase));
+    }
     return runStage(definition, values, root, position + 1);
   };
   const guarded = new Promise<Outcome<TResult>>((resolve, reject) => {

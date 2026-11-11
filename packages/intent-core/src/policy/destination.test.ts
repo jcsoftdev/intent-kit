@@ -75,3 +75,19 @@ test('a capability without a destination rule resolves to none', () => {
   const plain: AnyDescriptor = { ...descriptor, destination: undefined };
   expect(resolveDestination(plain, 'host', scope)).toEqual({ status: 'none' });
 });
+
+test('navigate output keeps params and target', () => {
+  const navigate: AnyDescriptor = { ...descriptor, kind: 'navigate', destination: undefined };
+  const output = {
+    routeId: 'myOrders',
+    params: { id: 'o-1' },
+    target: { intent: 'my-order', key: 'o-1' },
+  };
+  expect(resolveDestination(navigate, 'host', { input: {}, output })).toEqual({
+    status: 'ready',
+    destination: output,
+  });
+  expect(
+    resolveDestination(navigate, 'host', { input: {}, output: { routeId: 'x', params: { a: 1 } } }),
+  ).toEqual({ status: 'unresolved', code: 'TARGET_NOT_FOUND' });
+});

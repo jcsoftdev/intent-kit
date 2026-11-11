@@ -181,4 +181,23 @@ describe('capability registry', () => {
     await registry.loadEffect('orders.create', { signal });
     expect(calls.count).toBe(2);
   });
+
+  test('loadEffect rejects with signal.reason when aborted while the load is in flight', async () => {
+    const registry = createCapabilityRegistry();
+    let finish: () => void = () => undefined;
+    registry.register(
+      ordersCreate,
+      () =>
+        new Promise((resolve) => {
+          finish = () => resolve({ default: effect });
+        }),
+    );
+    const controller = new AbortController();
+    const aborting = registry.loadEffect('orders.create', { signal: controller.signal });
+    const other = registry.loadEffect('orders.create', { signal });
+    controller.abort(new Error('stop'));
+    await expect(aborting).rejects.toThrow('stop');
+    finish();
+    expect(await other).toBe(effect);
+  });
 });

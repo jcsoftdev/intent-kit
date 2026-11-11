@@ -54,12 +54,36 @@ const fillDestination = <TRouteId extends string>(
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null;
 
+const isStringRecord = (value: unknown): value is Record<string, string> =>
+  isRecord(value) && Object.values(value).every((entry) => typeof entry === 'string');
+
+const isTarget = (value: unknown): value is NonNullable<Destination<string>['target']> =>
+  isRecord(value) &&
+  typeof value.intent === 'string' &&
+  (value.key === undefined || typeof value.key === 'string');
+
 const destinationFromOutput = <TRouteId extends string>(
   output: unknown,
-): ResolvedDestination<TRouteId> =>
-  isRecord(output) && typeof output.routeId === 'string'
-    ? { status: 'ready', destination: { routeId: output.routeId as TRouteId } }
-    : unresolved;
+): ResolvedDestination<TRouteId> => {
+  if (!isRecord(output) || typeof output.routeId !== 'string') {
+    return unresolved;
+  }
+  const { params, target } = output;
+  if (
+    (params !== undefined && !isStringRecord(params)) ||
+    (target !== undefined && !isTarget(target))
+  ) {
+    return unresolved;
+  }
+  return {
+    status: 'ready',
+    destination: {
+      routeId: output.routeId as TRouteId,
+      ...(params ? { params } : {}),
+      ...(target ? { target } : {}),
+    },
+  };
+};
 
 export const resolveDestination = <TRole extends string, TRouteId extends string>(
   descriptor: CapabilityDescriptor<TRole, TRouteId, unknown, unknown>,

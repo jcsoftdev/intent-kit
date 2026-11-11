@@ -280,4 +280,33 @@ describe('pipeline run', () => {
       { type: 'stage.completed', pipeline: 'test', stage: 'timed', durationMs: 40, ok: true },
     ]);
   });
+
+  test('a late next() after the run returned ABORTED does not settle the terminal', async () => {
+    const controller = new AbortController();
+    let settled = 0;
+    let late: (() => Promise<Outcome<Result>>) | undefined;
+    const pipeline = createPipelineBuilder<State, Result>({
+      name: 'test',
+      seeds: ['text'],
+      terminal: {
+        requires: [],
+        settle: async () => {
+          settled += 1;
+          return { ok: true, value: 'done' };
+        },
+      },
+    })
+      .use(
+        stage('waiting', [], [], (_, next) => {
+          late = next;
+          return never();
+        }),
+      )
+      .build();
+    const running = pipeline.run({ text: 't' }, { signal: controller.signal });
+    controller.abort();
+    expect(await running).toMatchObject({ ok: false, failure: { code: 'ABORTED' } });
+    expect(await late?.()).toMatchObject({ ok: false, failure: { code: 'ABORTED' } });
+    expect(settled).toBe(0);
+  });
 });

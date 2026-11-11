@@ -30,6 +30,17 @@ const matches = (descriptor: AnyDescriptor, filter: DiscoveryFilter): boolean =>
   (filter.exposures === undefined || filter.exposures.includes(descriptor.agent)) &&
   (filter.scopes === undefined || filter.scopes.includes(descriptor.scope));
 
+const rejectOnAbort = <T>(promise: Promise<T>, signal: AbortSignal): Promise<T> =>
+  new Promise<T>((resolve, reject) => {
+    const onAbort = (): void => reject(signal.reason);
+    if (signal.aborted) {
+      onAbort();
+      return;
+    }
+    signal.addEventListener('abort', onAbort, { once: true });
+    promise.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort));
+  });
+
 export const createCapabilityRegistry = (): CapabilityRegistry => {
   const entries = new Map<string, Entry>();
 
@@ -84,7 +95,7 @@ export const createCapabilityRegistry = (): CapabilityRegistry => {
       if (!entry.loader) {
         throw new IntentFailureError(noLoader);
       }
-      return entry.pending ?? startLoad(entry, entry.loader);
+      return rejectOnAbort(entry.pending ?? startLoad(entry, entry.loader), options.signal);
     },
   };
 };
