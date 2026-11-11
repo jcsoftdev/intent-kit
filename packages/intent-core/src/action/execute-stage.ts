@@ -2,6 +2,7 @@ import { IntentFailureError, stageName } from '../contracts/index.js';
 import type {
   ActionResult,
   AnyDescriptor,
+  Authorizer,
   Clock,
   Effect,
   EffectResult,
@@ -14,7 +15,8 @@ import type { ActionStage } from './action-pipeline.js';
 
 export const EXECUTE_STAGE = stageName('execute');
 
-export interface ExecuteDependencies {
+export interface ExecuteDependencies<TPrincipal> {
+  readonly authorizer: Authorizer<TPrincipal>;
   readonly clock: Clock;
   readonly executeMs: number;
   readonly undo?: UndoRegistry;
@@ -24,6 +26,8 @@ const budgetExpired: EffectResult<unknown> = {
   ok: false,
   failure: { stage: 'execution', code: 'ABORTED', retryable: true },
 };
+
+const stalePlan: Failure = { stage: 'execution', code: 'STALE_PLAN', retryable: false };
 
 const executionFailure = (retryable: boolean): Failure => ({
   stage: 'execution',
@@ -50,7 +54,7 @@ const raceBudget = (
 type GraceOutcome = 'elapsed' | 'undone';
 
 const waitForGrace = async (
-  dependencies: ExecuteDependencies,
+  dependencies: Pick<ExecuteDependencies<unknown>, 'clock' | 'undo'>,
   plan: ExecutablePlan,
   descriptor: AnyDescriptor,
   signal: AbortSignal,
@@ -60,12 +64,16 @@ const waitForGrace = async (
     return 'elapsed';
   }
   const cancel = new AbortController();
+  let elapsed = false;
   const unregister = dependencies.undo?.offer({
     planId: plan.planId,
     capabilityId: descriptor.id,
     kind: 'grace',
     expiresAt: dependencies.clock.now() + reversibility.delayMs,
     undo: async () => {
+      if (elapsed) {
+        return { ok: false, failure: stalePlan };
+      }
       cancel.abort();
       return { ok: true, output: null };
     },
@@ -74,6 +82,7 @@ const waitForGrace = async (
     await dependencies.clock.delay(reversibility.delayMs, {
       signal: AbortSignal.any([signal, cancel.signal]),
     });
+    elapsed = true;
     unregister?.();
     return 'elapsed';
   } catch (error) {
@@ -115,11 +124,11 @@ const invokeEffect = async (
 };
 
 export const createExecuteStage = <TPrincipal, TRole extends string>(
-  dependencies: ExecuteDependencies,
+  dependencies: ExecuteDependencies<TPrincipal>,
 ): ActionStage<TPrincipal, TRole> => ({
   name: EXECUTE_STAGE,
   phase: 'execution',
-  requires: ['plan', 'descriptor', 'input', 'lifecycle'],
+  requires: ['plan', 'principal', 'descriptor', 'input', 'lifecycle'],
   provides: ['output'],
   async run(context, next): Promise<Outcome<ActionResult>> {
     const effect = context.find('effect');
@@ -134,6 +143,13 @@ export const createExecuteStage = <TPrincipal, TRole extends string>(
         ok: true,
         value: { status: 'undone', planId: plan.planId, capabilityId: descriptor.id },
       };
+    }
+    context.signal.throwIfAborted();
+    const decision = await dependencies.authorizer.authorize(context.get('principal'), descriptor, {
+      signal: context.signal,
+    });
+    if (!decision.allowed) {
+      return { ok: false, failure: decision.failure };
     }
     context
       .get('lifecycle')

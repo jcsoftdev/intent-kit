@@ -111,6 +111,30 @@ const announceSuccess = <TElement>(
   }
 };
 
+const present = async <TPrincipal, TRole extends string, TElement>(
+  dependencies: PresentDependencies<TElement>,
+  context: Parameters<ActionStage<TPrincipal, TRole>['run']>[0],
+  descriptor: AnyDescriptor,
+  scope: { readonly input: unknown; readonly output: unknown },
+): Promise<Presentation> => {
+  let presentation: Presentation;
+  try {
+    const reveal = context.get('lifecycle').presenting(context.get('plan').planId);
+    const resolved = resolveDestination<string, string>(descriptor, context.get('role'), scope);
+    presentation = await presentationOf(dependencies, resolved, reveal);
+  } catch {
+    presentation = degraded('ABORTED');
+  }
+  if (!isHandoff(descriptor)) {
+    try {
+      announceSuccess(dependencies, descriptor, scope);
+    } catch {
+      return presentation;
+    }
+  }
+  return presentation;
+};
+
 export const createPresentStage = <TPrincipal, TRole extends string, TElement>(
   dependencies: PresentDependencies<TElement>,
 ): ActionStage<TPrincipal, TRole> => ({
@@ -121,12 +145,7 @@ export const createPresentStage = <TPrincipal, TRole extends string, TElement>(
   async run(context, next) {
     const descriptor = context.get('descriptor');
     const scope = { input: context.get('input'), output: context.find('output') };
-    const reveal = context.get('lifecycle').presenting(context.get('plan').planId);
-    const resolved = resolveDestination<string, string>(descriptor, context.get('role'), scope);
-    const presentation = await presentationOf(dependencies, resolved, reveal);
-    if (!isHandoff(descriptor)) {
-      announceSuccess(dependencies, descriptor, scope);
-    }
+    const presentation = await present(dependencies, context, descriptor, scope);
     context.set('presentation', presentation);
     return next();
   },

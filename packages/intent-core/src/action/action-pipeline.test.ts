@@ -3,6 +3,7 @@ import type {
   ActionLifecycle,
   ActionResult,
   AnyDescriptor,
+  ConfirmationPort,
   ConfirmationRequest,
   Destination,
   EffectContext,
@@ -91,11 +92,18 @@ interface Options {
   readonly mounted?: readonly string[];
   readonly route?: { readonly routeId: string; readonly params: Record<string, string> };
   readonly confirmation?: 'confirmed' | 'declined';
+  readonly confirm?: ConfirmationPort['confirm'];
+  readonly onConfirm?: () => void;
+  readonly successThrows?: boolean;
   readonly navigateFails?: boolean;
   readonly effect?: (input: unknown, context: EffectContext) => Promise<EffectResult<unknown>>;
   readonly withUndo?: boolean;
   readonly withCompensator?: boolean;
 }
+
+const failWith = (message: string): never => {
+  throw new Error(message);
+};
 
 const flush = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -139,10 +147,13 @@ const harness = (options: Options = {}) => {
     registry,
     authorizer: createRoleAuthorizer((principal: Principal) => principal),
     confirmation: {
-      async confirm(request) {
-        confirmations.push(request);
-        return options.confirmation ?? 'confirmed';
-      },
+      confirm:
+        options.confirm ??
+        (async (request) => {
+          options.onConfirm?.();
+          confirmations.push(request);
+          return options.confirmation ?? 'confirmed';
+        }),
     },
     router: {
       currentRoute: () => route,
@@ -175,7 +186,10 @@ const harness = (options: Options = {}) => {
     },
     messages: {
       [descriptor.id]: {
-        success: ({ output }) => `Pedido enviado a cocina · ${tableOf(output)}`,
+        success: ({ output }) =>
+          options.successThrows
+            ? failWith('formatter')
+            : `Pedido enviado a cocina · ${tableOf(output)}`,
         confirm: ({ heard }) => `Confirmar: ${heard ?? ''}`,
       },
     },
@@ -360,8 +374,16 @@ test('router.navigate rejects → completed with degraded NAVIGATION_FAILED', as
 
 test('handoff capability: no effect loaded, destination revealed, status handedOff', async () => {
   const h = harness({
-    descriptor: { ...ordersCreate, kind: 'handoff', agent: 'handoff', risk: 'read' },
-    mounted: ['my-order:o-1'],
+    descriptor: {
+      ...ordersCreate,
+      kind: 'handoff',
+      agent: 'handoff',
+      risk: 'read',
+      destination: {
+        default: { routeId: 'importer', target: { intent: 'import-button' } },
+      },
+    },
+    mounted: ['import-button:'],
   });
   const outcome = await h.run();
   expect(outcome).toEqual({
@@ -370,9 +392,10 @@ test('handoff capability: no effect loaded, destination revealed, status handedO
       status: 'handedOff',
       planId: 'p-1',
       capabilityId: 'orders.create',
-      presentation: { status: 'degraded', code: 'TARGET_NOT_FOUND' },
+      presentation: { status: 'shown' },
     },
   });
+  expect(h.revealed).toEqual(['import-button:']);
   expect(h.calls).toEqual([]);
   expect(h.announcements).toEqual([]);
 });
@@ -516,4 +539,62 @@ test('an effect failure passes through unchanged', async () => {
   };
   const h = harness({ effect: async () => ({ ok: false, failure: conflict }) });
   expect(failureOf(await h.run())).toEqual(conflict);
+});
+
+const alwaysConfirm: AnyDescriptor = {
+  ...ordersCreate,
+  confirmation: 'always',
+  reversibility: { kind: 'none' },
+};
+
+test.each<[string, ConfirmationPort['confirm']]>([
+  ['resolves undefined', async () => Reflect.get({}, 'answer')],
+  ['resolves an unknown string', async () => Reflect.get({ answer: 'dismissed' }, 'answer')],
+  [
+    'rejects',
+    async () => {
+      throw new Error('dialog crashed');
+    },
+  ],
+])('a confirmation port that %s never runs the effect', async (_name, confirm) => {
+  const h = harness({ descriptor: alwaysConfirm, confirm });
+  expect(failureOf(await h.run())).toEqual({
+    stage: 'confirmation',
+    code: 'CONFIRMATION_DECLINED',
+    retryable: false,
+  });
+  expect(h.calls).toEqual([]);
+});
+
+test('a throwing success formatter degrades the presentation, keeps the write completed and offers undo', async () => {
+  const h = harness({
+    successThrows: true,
+    withUndo: true,
+    withCompensator: true,
+    mounted: ['my-order:o-1'],
+  });
+  const outcome = await h.run();
+  expect(outcome.ok && outcome.value).toMatchObject({
+    status: 'completed',
+    undo: { kind: 'compensate' },
+  });
+  expect(h.calls).toHaveLength(1);
+  expect(h.undo.active()).toHaveLength(1);
+  expect(await h.run()).toBe(outcome);
+});
+
+test('a role change while the confirmation is open fails UNAUTHORIZED with zero effect calls', async () => {
+  const principal = { active: 'waiter', granted: ['waiter'] };
+  const h = harness({
+    descriptor: alwaysConfirm,
+    onConfirm: () => {
+      principal.active = 'cook';
+    },
+  });
+  expect(failureOf(await h.run(orderPlan(), principal))).toEqual({
+    stage: 'policy',
+    code: 'UNAUTHORIZED',
+    retryable: false,
+  });
+  expect(h.calls).toEqual([]);
 });

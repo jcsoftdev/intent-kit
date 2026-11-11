@@ -1,4 +1,3 @@
-import { stageName } from '../contracts/index.js';
 import type {
   ActionLifecycle,
   ActionResult,
@@ -165,6 +164,7 @@ export function createActionPipeline<
     )
     .use(
       createExecuteStage({
+        authorizer: config.authorizer,
         clock,
         executeMs: budgets.executeMs,
         ...(config.undo ? { undo: config.undo } : {}),

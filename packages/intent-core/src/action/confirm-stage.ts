@@ -35,16 +35,23 @@ export const createConfirmStage = <TPrincipal, TRole extends string>(
         input: context.get('input'),
         heard: plan.heard,
       }) ?? descriptor.description;
-    const answer = await dependencies.confirmation.confirm(
-      {
-        planId: plan.planId,
-        capabilityId: descriptor.id,
-        risk: descriptor.risk,
-        summary,
-        heard: plan.heard,
-      },
-      { signal: context.signal },
-    );
-    return answer === 'declined' ? { ok: false, failure: declined } : next();
+    const answer = await dependencies.confirmation
+      .confirm(
+        {
+          planId: plan.planId,
+          capabilityId: descriptor.id,
+          risk: descriptor.risk,
+          summary,
+          heard: plan.heard,
+        },
+        { signal: context.signal },
+      )
+      .catch((error: unknown) => {
+        if (context.signal.aborted) {
+          throw error;
+        }
+        return 'declined';
+      });
+    return answer === 'confirmed' ? next() : { ok: false, failure: declined };
   },
 });
