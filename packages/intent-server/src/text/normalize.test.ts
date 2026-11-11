@@ -1,4 +1,4 @@
-import { matchClosedOption } from '@jcsoftdev/intent-core';
+import { foldText, matchClosedOption } from '@jcsoftdev/intent-core';
 import { describe, expect, test } from 'vitest';
 import { createNormalizer } from './normalize.js';
 
@@ -25,7 +25,9 @@ describe('normalize', () => {
     const options = [
       { id: 'a', label: 'Tres leches' },
       { id: 'b', label: 'Arroz con pollo' },
+      { id: 'c', label: 'Dos leches' },
     ];
+    expect(matchClosedOption(dish, options, foldText)).toBeUndefined();
     expect(matchClosedOption(dish, options, normalize)?.id).toBe('a');
   });
 });

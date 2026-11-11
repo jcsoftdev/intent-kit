@@ -1,5 +1,6 @@
 import { IntentDefinitionError } from '@jcsoftdev/intent-core';
 import { describe, expect, test } from 'vitest';
+import { createNormalizer } from './normalize.js';
 import { compilePattern } from './pattern.js';
 import type { SlotKind } from './pattern.js';
 
@@ -42,10 +43,42 @@ describe('compilePattern', () => {
   });
 
   test('500 characters of "a " against a three-slot pattern settles in under 50 ms', () => {
-    const pattern = compilePattern('{a} y {b} para {c}', kindOf);
+    const pattern = compilePattern('{a} y {b} para {quantity}', kindOf);
     const started = performance.now();
     expect(pattern.match('a '.repeat(250))).toBeUndefined();
     expect(performance.now() - started).toBeLessThan(50);
+  });
+
+  test('the worst allowed pattern (two text slots, numbers, one repeated separator) settles within 50 ms on 500 characters', () => {
+    const pattern = compilePattern('{quantity?} {a} x {b} y', kindOf);
+    const started = performance.now();
+    expect(pattern.match('x '.repeat(250))).toBeUndefined();
+    expect(performance.now() - started).toBeLessThan(50);
+  });
+
+  test.each(['{a} {b} listo', '{a} {b} {c} {d} listo', '{a} {quantity?} {b} listo', '(a|{x}) {y}'])(
+    'adjacent text slots or slots in alternations in %j throw INVALID_PATTERN',
+    (template) => {
+      expect(() => compilePattern(template, kindOf)).toThrow('INVALID_PATTERN');
+    },
+  );
+
+  test('a literal between text slots is accepted', () => {
+    expect(() => compilePattern('{a} con {b} listo', kindOf)).not.toThrow();
+  });
+
+  test.each([
+    'haz un pedido de {dish}',
+    'pedido de un {dish}',
+    '{dish} para la mesa uno',
+    'oye {dish}',
+  ])('literal %j that the normalizer rewrites throws INVALID_PATTERN', (template) => {
+    expect(() => compilePattern(template, kindOf, createNormalizer())).toThrow('INVALID_PATTERN');
+  });
+
+  test('a normalizer-stable template compiles and matches normalized text', () => {
+    const pattern = compilePattern('pedido de {dish} para la mesa 1', kindOf, createNormalizer());
+    expect(pattern.match('pedido de causa para la mesa 1')).toEqual({ dish: 'causa' });
   });
 
   test.each([

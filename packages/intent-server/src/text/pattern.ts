@@ -12,6 +12,8 @@ type Element =
   | { readonly kind: 'slot'; readonly name: string; readonly optional: boolean }
   | { readonly kind: 'literal'; readonly source: string };
 
+const MAX_SLOTS = 4;
+const MAX_TEXT_SLOTS = 2;
 const SLOT_NAME = /^[A-Za-z_$][\w$.[\]-]*$/;
 const SLOT_TOKEN = /^\{([^{}?]+)(\?)?\}$/;
 const ALTERNATION_TOKEN = /^\(([^()]*)\)$/;
@@ -48,15 +50,30 @@ const tokenize = (template: string): readonly string[] => {
   return current === '' ? tokens : [...tokens, current];
 };
 
-const alternationSource = (inner: string, template: string): string => {
-  const alternatives = inner.split('|').map(foldText);
+type Fold = (text: string) => string;
+
+const assertStable = (literal: string, fold: Fold, template: string): string => {
+  const folded = foldText(literal);
+  if (folded.split(' ').some((word) => word !== '' && fold(word) !== word)) {
+    throw invalid(template);
+  }
+  return folded;
+};
+
+const alternationSource = (inner: string, fold: Fold, template: string): string => {
+  const alternatives = inner.split('|').map((alternative) => {
+    if (/[{}]/.test(alternative)) {
+      throw invalid(template);
+    }
+    return assertStable(alternative, fold, template);
+  });
   if (alternatives.some((alternative) => alternative === '')) {
     throw invalid(template);
   }
   return `(?:${alternatives.join('|')})`;
 };
 
-const wordSource = (token: string, template: string): string => {
+const wordSource = (token: string, fold: Fold, template: string): string => {
   const source = token
     .split(CLASS_SPLIT)
     .map((part) => {
@@ -70,7 +87,7 @@ const wordSource = (token: string, template: string): string => {
       if (/[[\]{}()|]/.test(part)) {
         throw invalid(template);
       }
-      return foldText(part);
+      return assertStable(part, fold, template);
     })
     .join('');
   if (source === '') {
@@ -79,7 +96,7 @@ const wordSource = (token: string, template: string): string => {
   return source;
 };
 
-const parseElement = (token: string, template: string): Element => {
+const parseElement = (token: string, fold: Fold, template: string): Element => {
   const slot = SLOT_TOKEN.exec(token);
   if (slot) {
     const name = slot[1] as string;
@@ -90,9 +107,9 @@ const parseElement = (token: string, template: string): Element => {
   }
   const alternation = ALTERNATION_TOKEN.exec(token);
   if (alternation) {
-    return { kind: 'literal', source: alternationSource(alternation[1] as string, template) };
+    return { kind: 'literal', source: alternationSource(alternation[1] as string, fold, template) };
   }
-  return { kind: 'literal', source: wordSource(token, template) };
+  return { kind: 'literal', source: wordSource(token, fold, template) };
 };
 
 const slotSource = (kind: SlotKind, group: string): string =>
@@ -127,14 +144,38 @@ const assemble = (
   return { source, groups };
 };
 
+const assertSeparated = (
+  elements: readonly Element[],
+  kindOf: (slot: string) => SlotKind,
+  template: string,
+): void => {
+  let textSlotOpen = false;
+  elements.forEach((element) => {
+    if (element.kind === 'literal') {
+      textSlotOpen = false;
+    } else if (kindOf(element.name) === 'text') {
+      if (textSlotOpen) {
+        throw invalid(template);
+      }
+      textSlotOpen = true;
+    }
+  });
+};
+
 export const compilePattern = (
   template: string,
   kindOf: (slot: string) => SlotKind,
   fold: (text: string) => string = foldText,
 ): CompiledPattern => {
-  const elements = tokenize(template).map((token) => parseElement(token, template));
+  const elements = tokenize(template).map((token) => parseElement(token, fold, template));
+  assertSeparated(elements, kindOf, template);
   const names = elements.flatMap((element) => (element.kind === 'slot' ? [element.name] : []));
-  if (new Set(names).size !== names.length) {
+  const textSlots = names.filter((name) => kindOf(name) === 'text');
+  if (
+    new Set(names).size !== names.length ||
+    names.length > MAX_SLOTS ||
+    textSlots.length > MAX_TEXT_SLOTS
+  ) {
     throw invalid(template);
   }
   const { source, groups } = assemble(elements, kindOf);

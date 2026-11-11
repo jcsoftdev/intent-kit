@@ -21,17 +21,22 @@ const WILDCARD = '[]';
 
 const leafName = (path: string): string => path.split('.').at(-1)?.replaceAll(WILDCARD, '') ?? path;
 
-const uniqueLeafNames = (leaves: readonly JsonLeaf[]): readonly JsonLeaf[] => {
+const countBy = <T>(
+  items: readonly T[],
+  keyOf: (item: T) => string,
+): ReadonlyMap<string, number> => {
   const counts = new Map<string, number>();
-  leaves.forEach((leaf) =>
-    counts.set(leafName(leaf.path), (counts.get(leafName(leaf.path)) ?? 0) + 1),
-  );
+  items.forEach((item) => counts.set(keyOf(item), (counts.get(keyOf(item)) ?? 0) + 1));
+  return counts;
+};
+
+const uniqueLeafNames = (leaves: readonly JsonLeaf[]): readonly JsonLeaf[] => {
+  const counts = countBy(leaves, (leaf) => leafName(leaf.path));
   return leaves.filter((leaf) => counts.get(leafName(leaf.path)) === 1);
 };
 
 const entityNamesDeclaredOnce = (descriptor: AnyDescriptor): ReadonlySet<string> => {
-  const counts = new Map<string, number>();
-  descriptor.entities.forEach(({ entity }) => counts.set(entity, (counts.get(entity) ?? 0) + 1));
+  const counts = countBy(descriptor.entities, ({ entity }) => entity);
   return new Set([...counts].filter(([, count]) => count === 1).map(([entity]) => entity));
 };
 
@@ -65,8 +70,12 @@ export const resolveSlotKey = (index: SlotIndex, key: string): SlotTarget | unde
 
 type SlotValue = Proposal['slots'][string];
 
-const withIndices = (path: string, first: number): string =>
-  path.replace(WILDCARD, `[${first}]`).replaceAll(WILDCARD, '[0]');
+const withIndices = (path: string, repeated: number): string => {
+  const last = path.lastIndexOf(WILDCARD);
+  return last === -1
+    ? path
+    : `${path.slice(0, last).replaceAll(WILDCARD, '[0]')}[${repeated}]${path.slice(last + WILDCARD.length)}`;
+};
 
 const scalarEntries = (
   target: SlotTarget,
@@ -103,3 +112,19 @@ export const buildDraftInput = (index: SlotIndex, slots: Proposal['slots']): unk
         )
       : draft;
   }, {});
+
+const repeatedKeys = (counts: ReadonlyMap<string, number>): readonly string[] =>
+  [...counts].filter(([, count]) => count > 1).map(([key]) => key);
+
+export const ambiguousSlotKeys = (
+  descriptor: AnyDescriptor,
+  inputJsonSchema: JsonObject,
+): ReadonlySet<string> => {
+  const index = buildSlotIndex(descriptor, inputJsonSchema);
+  const leaves = jsonSchemaLeaves(inputJsonSchema);
+  const candidates = [
+    ...repeatedKeys(countBy(leaves, (leaf) => leafName(leaf.path))),
+    ...repeatedKeys(countBy(descriptor.entities, ({ entity }) => entity)),
+  ];
+  return new Set(candidates.filter((key) => !index.has(key)));
+};

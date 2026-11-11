@@ -39,6 +39,18 @@ const cases = [
     expected: [],
   },
   {
+    name: 'server production code may not import zod directly',
+    path: 'packages/intent-server/src/a.ts',
+    source: "import { z } from 'zod';",
+    expected: ['server-no-schema-adapter'],
+  },
+  {
+    name: 'server test files may import zod',
+    path: 'packages/intent-server/src/a.test.ts',
+    source: "import { z } from 'zod';",
+    expected: [],
+  },
+  {
     name: 'testing-only-in-tests rejects intent-testing in core',
     path: 'packages/intent-core/src/a.ts',
     source: "export * from '@jcsoftdev/intent-testing';",

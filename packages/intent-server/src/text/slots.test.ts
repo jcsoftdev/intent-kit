@@ -1,7 +1,7 @@
 import type { AnyDescriptor, JsonObject } from '@jcsoftdev/intent-core';
 import { describe, expect, test } from 'vitest';
 import { z } from 'zod';
-import { buildDraftInput, buildSlotIndex, resolveSlotKey } from './slots.js';
+import { ambiguousSlotKeys, buildDraftInput, buildSlotIndex, resolveSlotKey } from './slots.js';
 
 const schema = z.object({
   tableId: z.string(),
@@ -62,7 +62,49 @@ describe('buildSlotIndex', () => {
   });
 });
 
+describe('ambiguousSlotKeys', () => {
+  const twin = z.toJSONSchema(
+    z.object({ a: z.object({ id: z.string() }), b: z.object({ id: z.string() }) }),
+    { io: 'input' },
+  ) as JsonObject;
+  const twice = {
+    entities: [
+      { path: 'tableId', entity: 'thing' },
+      { path: 'lines[].offeringId', entity: 'thing' },
+    ],
+  } as unknown as AnyDescriptor;
+
+  test('reports repeated leaf names and entity names declared twice', () => {
+    expect(ambiguousSlotKeys({ entities: [] } as unknown as AnyDescriptor, twin)).toEqual(
+      new Set(['id']),
+    );
+    expect(ambiguousSlotKeys(twice, inputJsonSchema)).toEqual(new Set(['thing']));
+  });
+
+  test('does not report resolvable or unknown keys', () => {
+    expect(ambiguousSlotKeys(descriptor, inputJsonSchema)).toEqual(new Set());
+  });
+});
+
 describe('buildDraftInput', () => {
+  test('expands a string array over the last wildcard of a nested entity path', () => {
+    const nested = z.toJSONSchema(
+      z.object({
+        lines: z.array(z.object({ offeringId: z.string(), modifiers: z.array(z.string()) })),
+      }),
+      { io: 'input' },
+    ) as JsonObject;
+    const nestedIndex = buildSlotIndex(
+      {
+        entities: [{ path: 'lines[].modifiers[]', entity: 'modifier' }],
+      } as unknown as AnyDescriptor,
+      nested,
+    );
+    expect(buildDraftInput(nestedIndex, { modifier: ['papas fritas', 'ensalada'] })).toEqual({
+      lines: [{ modifiers: ['papas fritas', 'ensalada'] }],
+    });
+  });
+
   test('maps entity texts and numeric values into the input', () => {
     expect(buildDraftInput(index, { dish: 'arroz con pollo', table: '3', quantity: '2' })).toEqual({
       tableId: '3',

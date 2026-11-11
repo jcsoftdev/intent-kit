@@ -36,7 +36,8 @@ const SPECIFIER_RULES = [
   {
     rule: 'server-no-schema-adapter',
     applies: (path) => inPackage(path, 'intent-server') && !isTestFile(path),
-    forbids: (specifier) => specifier === '@jcsoftdev/intent-zod',
+    forbids: (specifier) =>
+      specifier === '@jcsoftdev/intent-zod' || specifier === 'zod' || specifier.startsWith('zod/'),
   },
   {
     rule: 'testing-only-in-tests',
