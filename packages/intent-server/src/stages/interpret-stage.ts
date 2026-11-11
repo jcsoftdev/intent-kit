@@ -7,6 +7,7 @@ import type { InterpretationState } from '../state.js';
 const DEFAULT_BUDGET_MS = 4000;
 const MIN_TOP_CONFIDENCE = 0.6;
 const MIN_CONFIDENCE_GAP = 0.2;
+const CONFIDENCE_EPSILON = 1e-9;
 
 const unsupported = (copy: InterpretationCopy, view: ServerCatalogView): Interpretation => ({
   status: 'unsupported',
@@ -26,7 +27,7 @@ const isDecisive = (ranked: readonly Proposal[]): boolean => {
   return (
     !second ||
     (top.confidence >= MIN_TOP_CONFIDENCE &&
-      top.confidence - second.confidence >= MIN_CONFIDENCE_GAP)
+      top.confidence - second.confidence >= MIN_CONFIDENCE_GAP - CONFIDENCE_EPSILON)
   );
 };
 

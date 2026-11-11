@@ -29,6 +29,14 @@ const isValidSelection = (field: MissingField, ids: readonly string[]): boolean 
   ids.length >= (field.min ?? 0) &&
   ids.length <= (field.max ?? Number.POSITIVE_INFINITY);
 
+const isDeclaredPath = (path: string, declared: readonly string[]): boolean => {
+  try {
+    return declared.some((pattern) => matchesPattern(path, pattern));
+  } catch {
+    return false;
+  }
+};
+
 const withoutSegments = (value: unknown, segments: readonly PathSegment[]): unknown => {
   const [head, ...rest] = segments;
   if (head === undefined || typeof value !== 'object' || value === null) {
@@ -86,9 +94,7 @@ export const createRequirementsStage = <TPrincipal>(config: {
     } catch (error) {
       return unavailableUnlessAborted(context.signal, error);
     }
-    const undeclared = fields.some(
-      ({ path }) => !entry.requirementPaths.some((declared) => matchesPattern(path, declared)),
-    );
+    const undeclared = fields.some(({ path }) => !isDeclaredPath(path, entry.requirementPaths));
     if (undeclared) {
       return resolutionUnavailable(false);
     }

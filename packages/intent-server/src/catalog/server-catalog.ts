@@ -49,7 +49,7 @@ const SLOT_CAPS = 'patterns allow at most 4 slots, at most 2 text slots and no s
 const SLOT_TOKEN = /\{[^{}]*\}/g;
 const SLOT_IN_ALTERNATION = /\([^()]*\{/;
 const LITERAL_SPLIT = /[\s()|[\]?]+/;
-const ID_SUFFIX = /Ids?$/;
+const ID_SUFFIX = /(?:Id|Ids|ID|IDs|_id|_ids|_ID|_IDs)$|^(?:id|ids|ID|IDs)$/;
 const TRAILING_WILDCARDS = /(\[\])+$/;
 const NON_LITERAL = /\{[^{}]*\}|[\s()|[\]?]/g;
 const WILDCARD = '[]';
@@ -120,6 +120,29 @@ const assertIdLeavesAreEntities = (
         `${descriptor.id}:${path} is id-shaped and must be declared as an entity path`,
       );
     }
+  }
+};
+
+const isOpenAdditional = (node: Readonly<Record<string, unknown>>): boolean =>
+  node.additionalProperties !== undefined && node.additionalProperties !== false;
+
+const hasOpenObject = (node: unknown): boolean => {
+  if (!isRecord(node)) {
+    return false;
+  }
+  return (
+    isOpenAdditional(node) ||
+    childSchemas(node).some(([, child]) => hasOpenObject(child)) ||
+    branchSchemas(node).some(hasOpenObject)
+  );
+};
+
+const assertClosedObjects = (descriptor: AnyDescriptor, schema: JsonObject): void => {
+  if (descriptor.agent !== 'never' && hasOpenObject(schema)) {
+    throw new IntentDefinitionError(
+      'INVALID_SCHEMA',
+      `${descriptor.id} accepts unknown keys in its input, so undeclared ids could pass through; use a strict or stripping object`,
+    );
   }
 };
 
@@ -231,11 +254,36 @@ const assertRequirementPaths = (
     if (!exists || collides) {
       throw new IntentDefinitionError('INVALID_PATH', `${descriptor.id}:${path}`);
     }
+    if (isRequiredAt(schema, parsePath(path))) {
+      throw new IntentDefinitionError(
+        'INVALID_SCHEMA',
+        `${descriptor.id}:${path} is a requirement path and must be optional in the input schema`,
+      );
+    }
   }
 };
 
 const isJsonObject = (value: unknown): value is JsonObject =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const isRequiredAt = (node: JsonObject, segments: readonly PathSegment[]): boolean => {
+  const [head, ...rest] = segments;
+  if (head === undefined) {
+    return false;
+  }
+  if (head === WILDCARD) {
+    return isJsonObject(node.items) && isRequiredAt(node.items, rest);
+  }
+  const properties = node.properties;
+  if (typeof head !== 'string' || !isJsonObject(properties)) {
+    return false;
+  }
+  if (rest.length === 0) {
+    return Array.isArray(node.required) && node.required.includes(head);
+  }
+  const child = properties[head];
+  return isJsonObject(child) && isRequiredAt(child, rest);
+};
 
 const omitPath = (node: JsonObject, segments: readonly PathSegment[]): JsonObject => {
   const [head, ...rest] = segments;
@@ -274,6 +322,7 @@ const buildEntry = (config: ServerCatalogConfig, descriptor: AnyDescriptor): Cat
     config.requirementPaths?.get(descriptor.id) ?? [],
   );
   assertRequirementPaths(descriptor, rawSchema, requirementPaths);
+  assertClosedObjects(descriptor, rawSchema);
   assertIdLeavesAreEntities(descriptor, rawSchema, requirementPaths);
   assertResolvers(descriptor, new Set(config.resolverEntities));
   const inputJsonSchema = omitPaths(

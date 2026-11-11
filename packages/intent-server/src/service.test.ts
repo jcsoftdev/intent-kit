@@ -776,8 +776,10 @@ describe('interpretation service', () => {
       patterns: ['pedido de {dish} para la mesa {table}'],
       input: z.object({
         tableId: z.string(),
-        lines: z.array(z.object({ offeringId: z.string(), modifiers: z.array(z.string()) })),
-        options: z.object({ sides: z.array(z.string()) }),
+        lines: z.array(
+          z.object({ offeringId: z.string(), modifiers: z.array(z.string()).optional() }),
+        ),
+        options: z.object({ sides: z.array(z.string()).optional() }),
       }),
       entities: [
         { path: 'lines[].offeringId', entity: 'dish' },
@@ -797,16 +799,11 @@ describe('interpretation service', () => {
       failure: { stage: 'resolution', code: 'INVALID_INPUT', retryable: false },
     };
 
-    test('N1: a schema-required requirement path never accepts a raw client answer', async () => {
+    test('N1: a requirement path never accepts a raw client answer', async () => {
       const { service } = serviceWith(
         [strictOrders],
         [lineProbe(['lines[].modifiers', 'options.sides'])],
       );
-      const first = await service.interpret(waiter, continuation(strictDraft, {}), { signal });
-      expect(first).toMatchObject({
-        ok: true,
-        value: { status: 'incomplete', missing: [{ path: 'lines[0].modifiers' }] },
-      });
       const answers = [
         { 'lines[0].modifiers': ['opt-foreign'] },
         { options: ['opt-foreign'] },
@@ -884,7 +881,7 @@ describe('interpretation service', () => {
         ...base,
         id: 'orders.create',
         description: 'Create an order',
-        input: z.object({ sideId: z.array(z.string()) }),
+        input: z.object({ sideId: z.array(z.string()).optional() }),
         roles: ['waiter'],
       });
       expect(() => serviceWith([sideIds], [lineProbe(['sideId'])])).not.toThrow();
@@ -896,6 +893,89 @@ describe('interpretation service', () => {
         roles: ['waiter'],
       });
       expect(() => serviceWith([modifierIds], [])).toThrow('INVALID_SCHEMA');
+    });
+
+    test('m2: a requirement path the input schema requires is INVALID_SCHEMA at creation', () => {
+      const required = define({
+        ...base,
+        id: 'orders.create',
+        description: 'Create an order',
+        input: z.object({
+          lines: z.array(z.object({ modifiers: z.array(z.string()) })),
+          options: z.object({ sides: z.array(z.string()) }),
+        }),
+        roles: ['waiter'],
+      });
+      for (const path of ['lines[].modifiers', 'options.sides']) {
+        expect(() => serviceWith([required], [lineProbe([path])])).toThrow('INVALID_SCHEMA');
+      }
+    });
+
+    test('m1: a probe that returns a malformed path fails closed with RESOLUTION_UNAVAILABLE', async () => {
+      for (const path of ['lines.0.modifiers', '__proto__', 'lines[0]..modifiers', '']) {
+        const malformed: MissingField = {
+          path,
+          reason: 'requirement',
+          prompt: 'Modifiers',
+          options: [{ id: 'opt-foreign', label: 'Extra' }],
+        };
+        const { service } = serviceWith(
+          [ordersCreate],
+          [lineProbe(['lines[].modifiers'], [malformed])],
+        );
+        const outcome = await service.interpret(
+          waiter,
+          continuation({ tableId: '3', lines: [{ offeringId: 'arroz con pollo' }] }, {}),
+          { signal },
+        );
+        expect(outcome).toEqual({
+          ok: false,
+          failure: { stage: 'resolution', code: 'RESOLUTION_UNAVAILABLE', retryable: false },
+        });
+      }
+    });
+
+    test('m3: id, ids, ID, IDs, _id and _ids suffixes are id-shaped', () => {
+      for (const name of ['id', 'ids', 'ID', 'IDs', 'tableID', 'modifier_ids', 'sub_id']) {
+        const named = define({
+          ...base,
+          id: 'orders.create',
+          description: 'Create an order',
+          input: z.object({ [name]: z.string() }),
+          roles: ['waiter'],
+        });
+        expect(() => serviceWith([named], [])).toThrow('INVALID_SCHEMA');
+      }
+      const plain = define({
+        ...base,
+        id: 'orders.create',
+        description: 'Create an order',
+        input: z.object({ paid: z.string(), grid: z.string(), valid: z.string() }),
+        roles: ['waiter'],
+      });
+      expect(() => serviceWith([plain], [])).not.toThrow();
+    });
+
+    test('T1b: an object schema that accepts unknown keys is INVALID_SCHEMA unless agent is never', () => {
+      const open = (input: z.ZodType, agent: 'allowed' | 'never') =>
+        define({
+          ...base,
+          id: 'orders.create',
+          description: 'Create an order',
+          agent,
+          input,
+          roles: ['waiter'],
+        });
+      const loose = z.looseObject({ note: z.string().optional() });
+      const catchall = z.object({ note: z.string().optional() }).catchall(z.string());
+      const nested = z.object({ lines: z.array(z.looseObject({ note: z.string().optional() })) });
+      for (const input of [loose, catchall, nested]) {
+        expect(() => serviceWith([open(input, 'allowed')], [])).toThrow('INVALID_SCHEMA');
+      }
+      expect(() => serviceWith([open(loose, 'never')], [])).not.toThrow();
+      expect(() =>
+        serviceWith([open(z.strictObject({ note: z.string().optional() }), 'allowed')], []),
+      ).not.toThrow();
     });
   });
 });

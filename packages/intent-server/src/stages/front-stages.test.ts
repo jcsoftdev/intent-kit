@@ -289,6 +289,14 @@ describe('front interpretation stages', () => {
     });
   });
 
+  test('a 0.2 gap computed from 0.7 and 0.5 counts as decisive', async () => {
+    const leader = harness(() =>
+      proposed(proposalOf('orders.create', 0.7), proposalOf('kitchen.lines.markReady', 0.5)),
+    );
+    const outcome = await leader.run({ input: utterance('quiero algo'), principal: waiter });
+    expect(outcome).not.toMatchObject({ value: { status: 'ambiguous' } });
+  });
+
   test('two close proposals are ambiguous and a clear leader wins', async () => {
     const close = harness(() =>
       proposed(proposalOf('orders.create', 0.7), proposalOf('kitchen.lines.markReady', 0.6)),
