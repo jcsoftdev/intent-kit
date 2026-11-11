@@ -80,8 +80,11 @@ export const createInMemoryEntityResolver = <TPrincipal>(config: {
     async resolve(principal, query, { signal }) {
       await pause(signal);
       const records = config.records(principal, query);
-      const text = normalize(query.text);
-      const queryTokens = tokensOf(text);
+      const queryTokens = tokensOf(normalize(query.text));
+      if (queryTokens.length === 0) {
+        return { status: 'notFound', nearest: [] };
+      }
+      const text = queryTokens.join(' ');
       const exact = records.filter((record) => isExact(record, text));
       if (exact.length > 0) {
         return resolveFrom(exact.map(toOption));

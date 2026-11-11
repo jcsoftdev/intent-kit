@@ -43,4 +43,16 @@ describe('fake targets', () => {
     controller.abort(new Error('gone'));
     await expect(pending).rejects.toThrow('gone');
   });
+
+  it('an already-aborted signal rejects with its reason even when the target exists', async () => {
+    const registry = createFakeTargetRegistry();
+    const ref = { intent: 'a' };
+    registry.register(ref, { id: 'e', role: 'button', name: 'A' }, expectation);
+    const controller = new AbortController();
+    const reason = new Error('already');
+    controller.abort(reason);
+    await expect(
+      registry.waitFor(ref, { signal: controller.signal, timeoutMs: 1000 }),
+    ).rejects.toBe(reason);
+  });
 });

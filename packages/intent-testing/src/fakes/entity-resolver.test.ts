@@ -70,4 +70,14 @@ describe('in-memory entity resolver', () => {
       'stop',
     );
   });
+
+  it('an empty or blank query is notFound instead of matching every record', async () => {
+    const resolver = build([{ id: 'd1', label: 'Ceviche' }]);
+    for (const text of ['', '   ']) {
+      await expect(resolver.resolve(null, query(text), { signal })).resolves.toEqual({
+        status: 'notFound',
+        nearest: [],
+      });
+    }
+  });
 });

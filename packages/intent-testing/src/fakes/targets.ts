@@ -61,13 +61,13 @@ export const createFakeTargetRegistry = (): FakeTargetRegistry => {
     waitFor(ref, { signal, timeoutMs }) {
       return new Promise<FakeElement>((resolve, reject) => {
         const key = keyOf(ref);
+        if (signal.aborted) {
+          reject(signal.reason);
+          return;
+        }
         const existing = elements.get(key);
         if (existing) {
           resolve(existing);
-          return;
-        }
-        if (signal.aborted) {
-          reject(signal.reason);
           return;
         }
         const finish = (): void => {
