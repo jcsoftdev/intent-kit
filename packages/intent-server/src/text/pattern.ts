@@ -1,0 +1,159 @@
+import { IntentDefinitionError, foldText } from '@jcsoftdev/intent-core';
+
+export type SlotKind = 'text' | 'number';
+
+export interface CompiledPattern {
+  readonly template: string;
+  readonly slots: readonly string[];
+  match(normalized: string): Readonly<Record<string, string>> | undefined;
+}
+
+type Element =
+  | { readonly kind: 'slot'; readonly name: string; readonly optional: boolean }
+  | { readonly kind: 'literal'; readonly source: string };
+
+const SLOT_NAME = /^[A-Za-z_$][\w$.[\]-]*$/;
+const SLOT_TOKEN = /^\{([^{}?]+)(\?)?\}$/;
+const ALTERNATION_TOKEN = /^\(([^()]*)\)$/;
+const CLASS_SPLIT = /(\[[^[\]]*\])/;
+
+const invalid = (template: string): IntentDefinitionError =>
+  new IntentDefinitionError('INVALID_PATTERN', template);
+
+const tokenize = (template: string): readonly string[] => {
+  const tokens: string[] = [];
+  let current = '';
+  let depth = 0;
+  for (const char of template) {
+    if (char === '(' || char === '{') {
+      depth += 1;
+    } else if (char === ')' || char === '}') {
+      depth -= 1;
+    }
+    if (depth < 0) {
+      throw invalid(template);
+    }
+    if (/\s/.test(char) && depth === 0) {
+      if (current !== '') {
+        tokens.push(current);
+        current = '';
+      }
+    } else {
+      current += char;
+    }
+  }
+  if (depth !== 0 || tokens.length + current.length === 0) {
+    throw invalid(template);
+  }
+  return current === '' ? tokens : [...tokens, current];
+};
+
+const alternationSource = (inner: string, template: string): string => {
+  const alternatives = inner.split('|').map(foldText);
+  if (alternatives.some((alternative) => alternative === '')) {
+    throw invalid(template);
+  }
+  return `(?:${alternatives.join('|')})`;
+};
+
+const wordSource = (token: string, template: string): string => {
+  const source = token
+    .split(CLASS_SPLIT)
+    .map((part) => {
+      if (part.startsWith('[') && part.endsWith(']')) {
+        const chars = foldText(part.slice(1, -1));
+        if (chars === '' || chars.includes(' ')) {
+          throw invalid(template);
+        }
+        return `[${chars}]`;
+      }
+      if (/[[\]{}()|]/.test(part)) {
+        throw invalid(template);
+      }
+      return foldText(part);
+    })
+    .join('');
+  if (source === '') {
+    throw invalid(template);
+  }
+  return source;
+};
+
+const parseElement = (token: string, template: string): Element => {
+  const slot = SLOT_TOKEN.exec(token);
+  if (slot) {
+    const name = slot[1] as string;
+    if (!SLOT_NAME.test(name)) {
+      throw invalid(template);
+    }
+    return { kind: 'slot', name, optional: slot[2] === '?' };
+  }
+  const alternation = ALTERNATION_TOKEN.exec(token);
+  if (alternation) {
+    return { kind: 'literal', source: alternationSource(alternation[1] as string, template) };
+  }
+  return { kind: 'literal', source: wordSource(token, template) };
+};
+
+const slotSource = (kind: SlotKind, group: string): string =>
+  kind === 'number' ? `(?<${group}>\\d+)` : `(?<${group}>.+?)`;
+
+const assemble = (
+  elements: readonly Element[],
+  kindOf: (slot: string) => SlotKind,
+): { readonly source: string; readonly groups: ReadonlyMap<string, string> } => {
+  const groups = new Map<string, string>();
+  let source = '';
+  let separatorPending = false;
+  elements.forEach((element, position) => {
+    const separator = separatorPending ? ' ' : '';
+    separatorPending = true;
+    if (element.kind === 'literal') {
+      source += `${separator}${element.source}`;
+      return;
+    }
+    const group = `s${groups.size}`;
+    groups.set(group, element.name);
+    const capture = slotSource(kindOf(element.name), group);
+    if (!element.optional) {
+      source += `${separator}${capture}`;
+    } else if (position === 0) {
+      source += `(?:${capture} )?`;
+      separatorPending = false;
+    } else {
+      source += `(?:${separator}${capture})?`;
+    }
+  });
+  return { source, groups };
+};
+
+export const compilePattern = (
+  template: string,
+  kindOf: (slot: string) => SlotKind,
+  fold: (text: string) => string = foldText,
+): CompiledPattern => {
+  const elements = tokenize(template).map((token) => parseElement(token, template));
+  const names = elements.flatMap((element) => (element.kind === 'slot' ? [element.name] : []));
+  if (new Set(names).size !== names.length) {
+    throw invalid(template);
+  }
+  const { source, groups } = assemble(elements, kindOf);
+  const expression = new RegExp(`^${source}$`, 'u');
+  return {
+    template,
+    slots: names,
+    match(normalized) {
+      const found = expression.exec(fold(normalized));
+      if (!found?.groups) {
+        return undefined;
+      }
+      const captured = [...groups].flatMap(([group, name]) => {
+        const value = found.groups?.[group];
+        return value === undefined ? [] : [[name, value] as const];
+      });
+      return captured.some(([, value]) => value.trim() === '')
+        ? undefined
+        : Object.fromEntries(captured);
+    },
+  };
+};
