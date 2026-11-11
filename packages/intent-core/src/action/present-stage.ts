@@ -132,9 +132,10 @@ const present = async <TPrincipal, TRole extends string, TElement>(
   try {
     const reveal = context.get('lifecycle').presenting(context.get('plan').planId);
     const resolved = resolveDestination<string, string>(descriptor, context.get('role'), scope);
+    const budget = dependencies.clock.timeout(dependencies.presentMs + dependencies.targetMs);
     presentation = await raceBudget(
-      presentationOf(dependencies, resolved, reveal),
-      dependencies.clock.timeout(dependencies.presentMs + dependencies.targetMs),
+      presentationOf(dependencies, resolved, AbortSignal.any([reveal, budget])),
+      budget,
     );
   } catch {
     presentation = degraded('ABORTED');

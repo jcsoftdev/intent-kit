@@ -482,6 +482,21 @@ test('a new submit while presenting cuts only the reveal: the write completes, i
   expect(h.signals[0]?.aborted).toBe(false);
 });
 
+test('when the present budget expires the reveal signal is aborted so a late target cannot steal focus', async () => {
+  const h = harness({
+    responders: [answering(complete('p-1'))],
+    reveal: () => new Promise<void>(() => undefined),
+  });
+  const submitted = h.session.submit({ text: 'uno', source: 'text' });
+  await flush();
+  expect(h.session.state().name).toBe('presenting');
+  await h.clock.advance(6000);
+  expect(completedResult(await submitted)).toMatchObject({
+    presentation: { status: 'degraded', code: 'ABORTED' },
+  });
+  expect(h.reveals[0]?.aborted).toBe(true);
+});
+
 test('a grace undo settles undone while the session is executing and the effect never runs', async () => {
   const h = harness({ descriptor: graceDescriptor, responders: [answering(complete('p-1'))] });
   const submitted = h.session.submit({ text: 'pedido', source: 'text' });
@@ -709,17 +724,38 @@ test('undo of an earlier plan works after a later command was cancelled, with a 
   expect(await h.session.undo('p-1')).toEqual({ name: 'undone', planId: 'p-1' });
 });
 
-test('undo of an earlier plan works after reset, with a compensator that honors its signal', async () => {
+test('undo of an earlier plan works after a cancelled command was reset, with a compensator that honors its signal', async () => {
+  const pending = deferred<Outcome<Interpretation>>();
   const h = harness({
-    responders: [answering(complete('p-1')), answering(unsupported)],
+    responders: [answering(complete('p-1')), () => pending.promise],
     compensate: honoringSignal,
   });
   await h.session.submit({ text: 'uno', source: 'text' });
   const second = h.session.submit({ text: 'dos', source: 'text' });
-  h.session.reset();
+  await flush();
+  h.session.cancel();
+  pending.resolve(ok(unsupported));
   await second;
   h.session.reset();
+  expect(h.session.state().name).toBe('idle');
   expect(await h.session.undo('p-1')).toEqual({ name: 'undone', planId: 'p-1' });
+});
+
+test('reset drops a queued submit: it resolves cancelled and never interprets', async () => {
+  const release = deferred<EffectResult<unknown>>();
+  const h = harness({
+    responders: [answering(complete('p-1')), answering(complete('p-2'))],
+    effect: () => release.promise,
+  });
+  const first = h.session.submit({ text: 'uno', source: 'text' });
+  await flush();
+  const queued = h.session.submit({ text: 'dos', source: 'text' });
+  await flush();
+  h.session.reset();
+  release.resolve({ ok: true, output: { orderId: 'o-1' } });
+  await first;
+  expect(await queued).toEqual({ name: 'cancelled' });
+  expect(h.interpretations).toHaveLength(1);
 });
 
 test('a second undo while undoing runs no parallel compensation and says an undo is in progress', async () => {
@@ -731,7 +767,7 @@ test('a second undo while undoing runs no parallel compensation and says an undo
   const refused = await h.session.undo('p-1');
   expect(refused).toEqual({ name: 'undoing', planId: 'p-2' });
   expect(h.compensations).toHaveLength(1);
-  expect(h.announcements.at(-1)).toEqual({ message: 'msg:CONFLICT', politeness: 'polite' });
+  expect(h.announcements.at(-1)).toEqual({ message: 'msg:NOT_AVAILABLE', politeness: 'polite' });
   h.session.cancel();
   await first;
 });
@@ -779,6 +815,8 @@ test('reset during undoing aborts the undo first and returns to idle', async () 
   await undone;
   expect(h.session.state().name).toBe('idle');
   expect(h.compensations[0]?.aborted).toBe(true);
+  expect(h.names()).not.toContain('failed');
+  expect(h.announcements.map(({ message }) => message)).not.toContain('msg:ABORTED');
 });
 
 test('cancel drops a queued submit: it resolves cancelled and never interprets', async () => {

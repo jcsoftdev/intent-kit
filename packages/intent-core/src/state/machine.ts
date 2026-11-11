@@ -84,7 +84,7 @@ function reduce(state: SessionState, event: SessionEvent): SessionState | undefi
     case 'failure':
       return isTerminal(state) ? undefined : { name: 'failed', failure: event.failure };
     case 'reset':
-      return isTerminal(state) ? { name: 'idle' } : undefined;
+      return isTerminal(state) || state.name === 'undoing' ? { name: 'idle' } : undefined;
   }
 }
 

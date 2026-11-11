@@ -396,7 +396,7 @@ export function createIntentSession<TPrincipal, TRole extends string>(
       return current;
     }
     if (isUndoing()) {
-      notice('CONFLICT');
+      notice('NOT_AVAILABLE');
       return current;
     }
     send(run, { type: 'undo.started', planId });
@@ -442,7 +442,6 @@ export function createIntentSession<TPrincipal, TRole extends string>(
         if (current.name === 'undoing') {
           undoAbort?.abort();
           undoAbort = undefined;
-          send(run, { type: 'failure', failure: abortedFailure });
         } else {
           cancelRun(run);
         }

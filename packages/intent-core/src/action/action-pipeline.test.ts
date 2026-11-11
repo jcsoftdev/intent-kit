@@ -569,6 +569,12 @@ test.each<[string, ConfirmationPort['confirm']]>([
       throw new Error('dialog crashed');
     },
   ],
+  [
+    'throws synchronously',
+    () => {
+      throw new Error('dialog crashed');
+    },
+  ],
 ])('a confirmation port that %s never runs the effect', async (_name, confirm) => {
   const h = harness({ descriptor: alwaysConfirm, confirm });
   expect(failureOf(await h.run())).toEqual({

@@ -35,8 +35,8 @@ export const createConfirmStage = <TPrincipal, TRole extends string>(
         input: context.get('input'),
         heard: plan.heard,
       }) ?? descriptor.description;
-    const answer = await dependencies.confirmation
-      .confirm(
+    const ask = async () =>
+      dependencies.confirmation.confirm(
         {
           planId: plan.planId,
           capabilityId: descriptor.id,
@@ -45,13 +45,13 @@ export const createConfirmStage = <TPrincipal, TRole extends string>(
           heard: plan.heard,
         },
         { signal: context.signal },
-      )
-      .catch((error: unknown) => {
-        if (context.signal.aborted) {
-          throw error;
-        }
-        return 'declined';
-      });
+      );
+    const answer = await ask().catch((error: unknown) => {
+      if (context.signal.aborted) {
+        throw error;
+      }
+      return 'declined';
+    });
     return answer === 'confirmed' ? next() : { ok: false, failure: declined };
   },
 });

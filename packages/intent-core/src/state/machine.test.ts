@@ -188,7 +188,11 @@ describe('transition table', () => {
         fail,
         { name: 'failed', failure },
       ]),
-    ...terminals.map((from): [SessionState, SessionEvent, SessionState] => [from, reset, idle]),
+    ...[...terminals, undoing].map((from): [SessionState, SessionEvent, SessionState] => [
+      from,
+      reset,
+      idle,
+    ]),
   ])('%o + %o', (from, event, expected) => {
     expect(transition(from, event)).toEqual(expected);
   });
@@ -256,7 +260,7 @@ const EXPECTED_CHANGES: readonly string[] = [
     'executing(sent,cancellable)',
   ].map((name) => `${name}+cancel`),
   ...allStates.filter((state) => !isTerminal(state)).map((state) => `${variant(state)}+failure`),
-  ...terminals.map((state) => `${state.name}+reset`),
+  ...[...terminals, undoing].map((state) => `${state.name}+reset`),
 ];
 
 describe('predicates', () => {
