@@ -1,0 +1,38 @@
+{
+  "name": "@jcsoftdev/intent-server",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Intent kit server package",
+  "author": "jcsoftdev",
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": false,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jcsoftdev/intent-kit.git",
+    "directory": "packages/intent-server"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@jcsoftdev/intent-core": "workspace:*"
+  },
+  "devDependencies": {
+    "@jcsoftdev/intent-testing": "workspace:*",
+    "@jcsoftdev/intent-zod": "workspace:*",
+    "zod": "4.6.7"
+  }
+}

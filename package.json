@@ -1,0 +1,32 @@
+{
+  "name": "intent-kit-root",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@9.12.2",
+  "engines": {
+    "node": ">=24 <27"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
+  },
+  "scripts": {
+    "build": "pnpm -r --filter \"./packages/*\" --filter \"./apps/*\" build",
+    "typecheck": "pnpm -r typecheck",
+    "test": "vitest run && node --test scripts/boundaries.test.mjs",
+    "format": "prettier --write \"**/*.{ts,mjs,json,md,yml}\"",
+    "format:check": "prettier --check \"**/*.{ts,mjs,json,md,yml}\"",
+    "check:boundaries": "node scripts/check-boundaries.mjs",
+    "check:bundle": "node scripts/check-bundle.mjs",
+    "check:comments": "node scripts/check-no-comments.mjs",
+    "check": "pnpm format:check && pnpm typecheck && pnpm test && pnpm build && pnpm check:boundaries && pnpm check:bundle && pnpm check:comments"
+  },
+  "devDependencies": {
+    "@types/node": "24.13.3",
+    "esbuild": "0.28.2",
+    "prettier": "3.9.6",
+    "typescript": "7.0.2",
+    "vitest": "4.1.12"
+  }
+}

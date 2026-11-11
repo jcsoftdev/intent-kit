@@ -1,0 +1,14 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "paths": {
+      "@jcsoftdev/intent-core": ["../intent-core/src/index.ts"],
+      "@jcsoftdev/intent-zod": ["../intent-zod/src/index.ts"],
+      "@jcsoftdev/intent-server": ["../intent-server/src/index.ts"],
+      "@jcsoftdev/intent-testing": ["../intent-testing/src/index.ts"],
+      "@jcsoftdev/intent-testing/contracts": ["../intent-testing/src/contracts/index.ts"]
+    }
+  },
+  "include": ["src", "test"]
+}

@@ -1,0 +1,30 @@
+{
+  "name": "@jcsoftdev/intent-core",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Intent kit core package",
+  "author": "jcsoftdev",
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": false,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jcsoftdev/intent-kit.git",
+    "directory": "packages/intent-core"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json"
+  }
+}

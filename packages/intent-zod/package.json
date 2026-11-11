@@ -1,0 +1,39 @@
+{
+  "name": "@jcsoftdev/intent-zod",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Intent kit zod package",
+  "author": "jcsoftdev",
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": false,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jcsoftdev/intent-kit.git",
+    "directory": "packages/intent-zod"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@jcsoftdev/intent-core": "workspace:*"
+  },
+  "peerDependencies": {
+    "zod": ">=4.6.0 <5"
+  },
+  "devDependencies": {
+    "zod": "4.6.7"
+  }
+}
