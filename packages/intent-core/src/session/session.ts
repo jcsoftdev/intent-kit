@@ -157,9 +157,8 @@ export function createIntentSession<TPrincipal, TRole extends string>(
   };
 
   const guardRole = (run: Run<TRole>): void => {
-    if (cancelIfRoleChanged(run)) {
-      run.controller.signal.throwIfAborted();
-    }
+    cancelIfRoleChanged(run);
+    run.controller.signal.throwIfAborted();
   };
 
   const lifecycleOf = (run: Run<TRole>): ActionLifecycle => ({
@@ -257,22 +256,17 @@ export function createIntentSession<TPrincipal, TRole extends string>(
     ...(restrictTo === undefined ? {} : { restrictTo }),
   });
 
-  const waitForRunning = async (ticket: number): Promise<boolean> => {
-    while (holdsNewCommands(current) && running) {
+  const submit = async (command: Command): Promise<SessionState> => {
+    queueTicket += 1;
+    const ticket = queueTicket;
+    await Promise.resolve();
+    while (ticket === queueTicket && holdsNewCommands(current) && running) {
       if (current.name === 'presenting') {
         active?.reveal?.abort();
       }
       await running;
-      if (ticket !== queueTicket) {
-        return false;
-      }
     }
-    return true;
-  };
-
-  const submit = async (command: Command): Promise<SessionState> => {
-    queueTicket += 1;
-    if (!(await waitForRunning(queueTicket))) {
+    if (ticket !== queueTicket) {
       return current;
     }
     if (active) {
@@ -347,10 +341,10 @@ export function createIntentSession<TPrincipal, TRole extends string>(
       await running;
       return current;
     }
-    if (current.name !== 'completed' || current.result.planId !== planId) {
+    send(run, { type: 'undo.started', planId });
+    if (current.name !== 'undoing') {
       return current;
     }
-    send(run, { type: 'undo.started', planId });
     await track(runUndo(run, planId));
     return current;
   };

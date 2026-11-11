@@ -12,6 +12,7 @@ const TERMINAL_NAMES: ReadonlySet<Name> = new Set([
 
 const CAPTURE_START_FROM: ReadonlySet<Name> = new Set(['idle']);
 const CAPTURE_SUBMIT_FROM: ReadonlySet<Name> = new Set(['idle', 'capturing']);
+const UNDO_START_FROM: ReadonlySet<Name> = new Set(['idle']);
 const CONFIRMATION_FROM: ReadonlySet<Name> = new Set(['interpreting', 'clarifying']);
 const EXECUTION_FROM: ReadonlySet<Name> = new Set([
   'interpreting',
@@ -71,7 +72,7 @@ function reduce(state: SessionState, event: SessionEvent): SessionState | undefi
     case 'action.settled':
       return settle(state, event.result);
     case 'undo.started':
-      return state.name === 'completed' && state.result.planId === event.planId
+      return startsFrom(UNDO_START_FROM, state)
         ? { name: 'undoing', planId: event.planId }
         : undefined;
     case 'undo.finished':

@@ -167,7 +167,11 @@ describe('transition table', () => {
       ],
     ),
     [executingSentFixed, settled(undoneResult), undone],
-    [completed, undoStarted, undoing],
+    ...[idle, ...terminals].map((from): [SessionState, SessionEvent, SessionState] => [
+      from,
+      undoStarted,
+      undoing,
+    ]),
     [undoing, undoFinished, undone],
     ...[
       capturing,
@@ -209,10 +213,6 @@ describe('no-ops', () => {
     expect(transition(presenting, cancel)).toBe(presenting);
   });
 
-  test('undo.started with a foreign planId is a no-op', () => {
-    expect(transition(completed, { type: 'undo.started', planId: 'other' })).toBe(completed);
-  });
-
   test('every state x event pair not in the table returns the identical state object', () => {
     const changed: string[] = [];
     for (const state of allStates) {
@@ -243,7 +243,9 @@ const EXPECTED_CHANGES: readonly string[] = [
   'executing(unsent)+execution.sent',
   ...EXECUTING.map((name) => `${name}+presentation.started`),
   ...[...EXECUTING, 'presenting'].map((name) => `${name}+action.settled`),
-  'completed+undo.started',
+  ...['idle', 'completed', 'undone', 'cancelled', 'failed', 'unsupported'].map(
+    (name) => `${name}+undo.started`,
+  ),
   'undoing+undo.finished',
   ...[
     'capturing',

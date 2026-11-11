@@ -148,12 +148,14 @@ export const createExecuteStage = <TPrincipal, TRole extends string>(
     const decision = await dependencies.authorizer.authorize(context.get('principal'), descriptor, {
       signal: context.signal,
     });
+    context.signal.throwIfAborted();
     if (!decision.allowed) {
       return { ok: false, failure: decision.failure };
     }
     context
       .get('lifecycle')
       .sending(plan.planId, descriptor.kind === 'read' || descriptor.kind === 'navigate');
+    context.signal.throwIfAborted();
     const result = await invokeEffect(effect, context.get('input'), descriptor, plan, {
       root: context.signal,
       budget: dependencies.clock.timeout(dependencies.executeMs),

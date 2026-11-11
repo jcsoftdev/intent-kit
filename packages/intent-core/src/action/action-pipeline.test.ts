@@ -99,6 +99,7 @@ interface Options {
   readonly effect?: (input: unknown, context: EffectContext) => Promise<EffectResult<unknown>>;
   readonly withUndo?: boolean;
   readonly withCompensator?: boolean;
+  readonly holdSecondAuthorization?: Promise<void>;
 }
 
 const failWith = (message: string): never => {
@@ -143,9 +144,19 @@ const harness = (options: Options = {}) => {
     sending: (_planId, cancellable) => lifecycleCalls.push(`sending:${cancellable}`),
     presenting: () => new AbortController().signal,
   };
+  const baseAuthorizer = createRoleAuthorizer((principal: Principal) => principal);
+  let authorizations = 0;
   const pipeline = createActionPipeline<Principal, string, string, string>({
     registry,
-    authorizer: createRoleAuthorizer((principal: Principal) => principal),
+    authorizer: {
+      async authorize(principal, authorized, authorizeOptions) {
+        authorizations += 1;
+        if (authorizations === 2) {
+          await options.holdSecondAuthorization;
+        }
+        return baseAuthorizer.authorize(principal, authorized, authorizeOptions);
+      },
+    },
     confirmation: {
       confirm:
         options.confirm ??
@@ -210,11 +221,9 @@ const harness = (options: Options = {}) => {
   const run = (
     plan: ExecutablePlan = orderPlan(),
     principal: Principal = waiter,
+    signal: AbortSignal = new AbortController().signal,
   ): Promise<Outcome<ActionResult>> =>
-    pipeline.run(
-      { plan, principal, role: principal.active, lifecycle },
-      { signal: new AbortController().signal },
-    );
+    pipeline.run({ plan, principal, role: principal.active, lifecycle }, { signal });
   return {
     run,
     clock,
@@ -596,5 +605,21 @@ test('a role change while the confirmation is open fails UNAUTHORIZED with zero 
     code: 'UNAUTHORIZED',
     retryable: false,
   });
+  expect(h.calls).toEqual([]);
+});
+
+test('an abort while re-authorization is pending never calls the effect', async () => {
+  let release: () => void = () => undefined;
+  const hold = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const h = harness({ holdSecondAuthorization: hold });
+  const controller = new AbortController();
+  const settled = h.run(orderPlan(), waiter, controller.signal);
+  await flush();
+  controller.abort();
+  release();
+  expect(failureOf(await settled)?.code).toBe('ABORTED');
+  await flush();
   expect(h.calls).toEqual([]);
 });

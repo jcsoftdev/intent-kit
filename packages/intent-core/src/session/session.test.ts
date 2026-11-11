@@ -141,6 +141,7 @@ interface Options {
   readonly effect?: (input: unknown, context: EffectContext) => Promise<EffectResult<unknown>>;
   readonly confirm?: () => Promise<'confirmed' | 'declined'>;
   readonly reveal?: (signal: AbortSignal) => Promise<void>;
+  readonly holdSecondAuthorization?: Promise<void>;
 }
 
 const harness = (options: Options = {}) => {
@@ -165,9 +166,19 @@ const harness = (options: Options = {}) => {
   const responders = [...(options.responders ?? [])];
   const reveals: AbortSignal[] = [];
   let role = 'waiter';
+  const baseAuthorizer = createRoleAuthorizer((principal: Principal) => principal);
+  let authorizations = 0;
   const kit = createIntentKit<Principal, string, string, string>({
     registry,
-    authorizer: createRoleAuthorizer((principal: Principal) => principal),
+    authorizer: {
+      async authorize(principal, authorized, authorizeOptions) {
+        authorizations += 1;
+        if (authorizations === 2) {
+          await options.holdSecondAuthorization;
+        }
+        return baseAuthorizer.authorize(principal, authorized, authorizeOptions);
+      },
+    },
     confirmation: { confirm: options.confirm ?? (async () => 'confirmed') },
     router: {
       currentRoute: () => undefined,
@@ -530,9 +541,9 @@ test('events from a superseded command never change the current state', async ()
   const second = session.submit({ text: 'dos', source: 'text' });
   await flush();
   expect(session.state().name).toBe('interpreting');
-  lifecycle?.confirming('p-1');
-  lifecycle?.executing('p-1');
-  lifecycle?.sending('p-1', false);
+  expect(() => lifecycle?.confirming('p-1')).toThrow();
+  expect(() => lifecycle?.executing('p-1')).toThrow();
+  expect(() => lifecycle?.sending('p-1', false)).toThrow();
   lifecycle?.presenting('p-1');
   expect(session.state().name).toBe('interpreting');
   pending.resolve({
@@ -548,4 +559,109 @@ test('events from a superseded command never change the current state', async ()
   await first;
   late.resolve(ok(unsupported));
   expect((await second).name).toBe('unsupported');
+});
+
+test('cancel while re-authorization is pending never calls the effect', async () => {
+  const hold = deferred<void>();
+  const h = harness({
+    responders: [answering(complete('p-1'))],
+    holdSecondAuthorization: hold.promise,
+  });
+  const submitted = h.session.submit({ text: 'pedido', source: 'text' });
+  await flush();
+  h.session.cancel();
+  hold.resolve();
+  await submitted;
+  await flush();
+  expect(h.session.state().name).toBe('cancelled');
+  expect(h.calls).toEqual([]);
+});
+
+test('a new submit while re-authorization is pending never calls the superseded effect', async () => {
+  const hold = deferred<void>();
+  const h = harness({
+    responders: [answering(complete('p-1')), answering(unsupported)],
+    holdSecondAuthorization: hold.promise,
+  });
+  const first = h.session.submit({ text: 'uno', source: 'text' });
+  await flush();
+  const second = h.session.submit({ text: 'dos', source: 'text' });
+  await flush();
+  hold.resolve();
+  await first;
+  await second;
+  expect(h.calls).toEqual([]);
+  expect(h.names()).toEqual([
+    'interpreting',
+    'executing',
+    'cancelled',
+    'interpreting',
+    'unsupported',
+  ]);
+});
+
+test('a submit racing an undo queues behind it and then runs through the normal states', async () => {
+  const h = harness({
+    responders: [answering(complete('p-1')), answering(complete('p-2'))],
+  });
+  await h.session.submit({ text: 'uno', source: 'text' });
+  const second = h.session.submit({ text: 'dos', source: 'text' });
+  const undone = h.session.undo('p-1');
+  expect((await undone).name).toBe('undone');
+  const state = await second;
+  expect(completedResult(state)?.planId).toBe('p-2');
+  expect(h.names().slice(-7)).toEqual([
+    'completed',
+    'undoing',
+    'undone',
+    'interpreting',
+    'executing',
+    'presenting',
+    'completed',
+  ]);
+  expect(h.calls).toHaveLength(2);
+});
+
+test('undo of an earlier plan still offered works after another command and is announced when it fails', async () => {
+  const h = harness({ responders: [answering(complete('p-1')), answering(unsupported)] });
+  await h.session.submit({ text: 'uno', source: 'text' });
+  await h.session.submit({ text: 'dos', source: 'text' });
+  expect(h.kit.undo.active().map((entry) => entry.planId)).toEqual(['p-1']);
+  expect(await h.session.undo('p-1')).toEqual({ name: 'undone', planId: 'p-1' });
+  expect(h.kit.undo.active()).toEqual([]);
+  expect((await h.session.undo('p-1')).name).toBe('failed');
+  expect(h.announcements.at(-1)).toEqual({ message: 'msg:STALE_PLAN', politeness: 'assertive' });
+});
+
+test('the lifecycle refuses to send once the command is cancelled', async () => {
+  const lifecycles: ActionLifecycle[] = [];
+  const session = createIntentSession<Principal, string>({
+    interpretation: { interpret: async () => ok(complete('p-1')) },
+    pipeline: {
+      stages: [],
+      run: (seed) => {
+        if (seed.lifecycle) {
+          lifecycles.push(seed.lifecycle);
+        }
+        return new Promise(() => undefined);
+      },
+    },
+    undo: {
+      offer: () => () => undefined,
+      active: () => [],
+      undo: async () => ({ ok: true, output: null }),
+    },
+    announcer: { announce: () => undefined },
+    events: { emit: () => undefined, subscribe: () => () => undefined },
+    principal: () => ({ active: 'waiter', granted: ['waiter'] }),
+    activeRole: () => 'waiter',
+    locale: 'es-PE',
+    failureMessages,
+  });
+  void session.submit({ text: 'uno', source: 'text' });
+  await flush();
+  lifecycles[0]?.executing('p-1');
+  session.cancel();
+  expect(() => lifecycles[0]?.sending('p-1', false)).toThrow();
+  expect(session.state().name).toBe('cancelled');
 });
