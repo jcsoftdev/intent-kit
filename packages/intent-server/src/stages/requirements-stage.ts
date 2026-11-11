@@ -1,11 +1,5 @@
 import { expandPattern, matchesPattern, parsePath, setAtPath } from '@jcsoftdev/intent-core';
-import type {
-  Interpretation,
-  MissingField,
-  PathSegment,
-  RequirementProbe,
-  Stage,
-} from '@jcsoftdev/intent-core';
+import type { Interpretation, MissingField, RequirementProbe, Stage } from '@jcsoftdev/intent-core';
 import { INTERPRETATION_STAGES } from '../state.js';
 import type { InterpretationState } from '../state.js';
 import {
@@ -14,6 +8,7 @@ import {
   resolutionUnavailable,
   unavailableUnlessAborted,
   withoutAnswers,
+  withoutSegments,
 } from './entities-stage.js';
 
 const idsOf = (answer: unknown): readonly string[] | undefined => {
@@ -35,24 +30,6 @@ const isDeclaredPath = (path: string, declared: readonly string[]): boolean => {
   } catch {
     return false;
   }
-};
-
-const withoutSegments = (value: unknown, segments: readonly PathSegment[]): unknown => {
-  const [head, ...rest] = segments;
-  if (head === undefined || typeof value !== 'object' || value === null) {
-    return value;
-  }
-  if (Array.isArray(value)) {
-    return value.map((item, index) => (index === head ? withoutSegments(item, rest) : item));
-  }
-  return Object.fromEntries(
-    Object.entries(value).flatMap(([key, child]) => {
-      if (key !== head) {
-        return [[key, child]];
-      }
-      return rest.length === 0 ? [] : [[key, withoutSegments(child, rest)]];
-    }),
-  );
 };
 
 const withoutRequirementValues = (input: unknown, patterns: readonly string[]): unknown =>

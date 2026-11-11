@@ -7,6 +7,7 @@ import {
 } from '@jcsoftdev/intent-core';
 import type {
   Answers,
+  PathSegment,
   ClosedOption,
   EntityParam,
   EntityResolver,
@@ -60,8 +61,31 @@ export const answersAreWellFormed = (answers: Answers): boolean =>
 export const withoutAnswers = (answers: Answers, consumed: readonly string[]): Answers =>
   Object.fromEntries(Object.entries(answers).filter(([path]) => !consumed.includes(path)));
 
+export const withoutSegments = (value: unknown, segments: readonly PathSegment[]): unknown => {
+  const [head, ...rest] = segments;
+  if (head === undefined || typeof value !== 'object' || value === null) {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map((item, index) => (index === head ? withoutSegments(item, rest) : item));
+  }
+  return Object.fromEntries(
+    Object.entries(value).flatMap(([key, child]) => {
+      if (key !== head) {
+        return [[key, child]];
+      }
+      return rest.length === 0 ? [] : [[key, withoutSegments(child, rest)]];
+    }),
+  );
+};
+
 type PathResult =
-  | { readonly kind: 'resolved'; readonly id: string; readonly label: string }
+  | {
+      readonly kind: 'resolved';
+      readonly id: string;
+      readonly label: string;
+      readonly gluedQuantityPath?: string;
+    }
   | { readonly kind: 'ambiguous'; readonly options: readonly ClosedOption[] }
   | { readonly kind: 'skipped' }
   | { readonly kind: 'failed'; readonly outcome: Outcome<never> };
@@ -76,6 +100,13 @@ const INVALID_RESULT: PathResult = { kind: 'failed', outcome: invalidInputInReso
 const NOT_FOUND_RESULT: PathResult = {
   kind: 'failed',
   outcome: failureOutcome({ stage: 'resolution', code: 'ENTITY_NOT_FOUND', retryable: false }),
+};
+
+const QUANTITY_KEY = 'quantity';
+
+const siblingQuantityPath = (path: string): string => {
+  const parent = parentOf(path);
+  return parent === '' ? QUANTITY_KEY : `${parent}.${QUANTITY_KEY}`;
 };
 
 const parentOf = (path: string): string => /^(.*\])\.[^\]]*$/.exec(path)?.[1] ?? '';
@@ -161,9 +192,27 @@ export const createEntitiesStage = <TPrincipal>(config: {
                 await resolver.options(principal, path, draft, { signal: context.signal }),
               );
         }
+        const query = { hints: hintsFor(path, resolved), scope: param.scope ?? 'any' } as const;
+        const quantityPath = siblingQuantityPath(path);
+        const quantity: unknown = getAtPath(draft.input, quantityPath);
+        if (typeof quantity === 'number' && answer === undefined) {
+          const glued = await resolver.resolve(
+            principal,
+            { ...query, text: `${quantity} ${text}` },
+            { signal: context.signal },
+          );
+          if (glued.status === 'found') {
+            return {
+              kind: 'resolved',
+              id: glued.id,
+              label: glued.label,
+              gluedQuantityPath: quantityPath,
+            };
+          }
+        }
         const resolution = await resolver.resolve(
           principal,
-          { text, hints: hintsFor(path, resolved), scope: param.scope ?? 'any' },
+          { ...query, text },
           { signal: context.signal },
         );
         if (resolution.status === 'found') {
@@ -205,6 +254,9 @@ export const createEntitiesStage = <TPrincipal>(config: {
         }
         if (result.kind === 'resolved') {
           input = setAtPath(input, path, result.id);
+          if (result.gluedQuantityPath !== undefined) {
+            input = withoutSegments(input, parsePath(result.gluedQuantityPath));
+          }
           labels[path] = result.label;
           resolved.push({ path, entity: param.entity, id: result.id });
           consumed.push(path);

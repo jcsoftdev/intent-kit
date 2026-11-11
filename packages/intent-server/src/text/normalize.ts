@@ -31,18 +31,36 @@ export const SPANISH_NORMALIZATION: NormalizationRules = {
 
 const MAX_UTTERANCE_LENGTH = 500;
 
-const stripLeadingFiller = (text: string, fillers: readonly string[]): string | undefined => {
+const isQuantityBeforeNumberWord = (
+  filler: string,
+  rest: string,
+  words: ReadonlyMap<string, number>,
+): boolean => words.has(filler) && words.has(rest.split(' ')[0] ?? '');
+
+const stripLeadingFiller = (
+  text: string,
+  fillers: readonly string[],
+  words: ReadonlyMap<string, number>,
+): string | undefined => {
   const filler = fillers.find(
     (candidate) => text === candidate || text.startsWith(`${candidate} `),
   );
-  return filler === undefined ? undefined : text.slice(filler.length).trim();
+  if (filler === undefined) {
+    return undefined;
+  }
+  const rest = text.slice(filler.length).trim();
+  return isQuantityBeforeNumberWord(filler, rest, words) ? undefined : rest;
 };
 
-const stripLeadingFillers = (text: string, fillers: readonly string[]): string => {
+const stripLeadingFillers = (
+  text: string,
+  fillers: readonly string[],
+  words: ReadonlyMap<string, number>,
+): string => {
   let current = text;
-  for (let next = stripLeadingFiller(current, fillers); next !== undefined;) {
+  for (let next = stripLeadingFiller(current, fillers, words); next !== undefined;) {
     current = next;
-    next = stripLeadingFiller(current, fillers);
+    next = stripLeadingFiller(current, fillers, words);
   }
   return current;
 };
@@ -65,7 +83,7 @@ export const createNormalizer = (
   );
   return (text) =>
     replaceNumberWords(
-      stripLeadingFillers(foldText(text.slice(0, MAX_UTTERANCE_LENGTH)), fillers),
+      stripLeadingFillers(foldText(text.slice(0, MAX_UTTERANCE_LENGTH)), fillers, words),
       words,
     )
       .replace(/\s+/g, ' ')
