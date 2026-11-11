@@ -28,6 +28,7 @@ export interface EntityResolver<TPrincipal> {
 
 export interface RequirementProbe<TPrincipal> {
   readonly capabilityId: string;
+  readonly paths: readonly string[];
   probe(
     principal: TPrincipal,
     draft: Draft,

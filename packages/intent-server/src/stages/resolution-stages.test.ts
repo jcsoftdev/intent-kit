@@ -223,6 +223,7 @@ describe('resolution stages', () => {
   test('requirements without a probe pass through; selections outside [min, max] are INVALID_INPUT', async () => {
     const probe: RequirementProbe<Principal> = {
       capabilityId: 'orders.create',
+      paths: ['lines[].modifiers'],
       probe: async () => [
         {
           path: 'lines[0].modifiers',

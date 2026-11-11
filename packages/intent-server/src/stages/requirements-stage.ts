@@ -1,5 +1,11 @@
-import { setAtPath } from '@jcsoftdev/intent-core';
-import type { Interpretation, MissingField, RequirementProbe, Stage } from '@jcsoftdev/intent-core';
+import { expandPattern, parsePath, setAtPath } from '@jcsoftdev/intent-core';
+import type {
+  Interpretation,
+  MissingField,
+  PathSegment,
+  RequirementProbe,
+  Stage,
+} from '@jcsoftdev/intent-core';
 import { INTERPRETATION_STAGES } from '../state.js';
 import type { InterpretationState } from '../state.js';
 import {
@@ -21,6 +27,29 @@ const isValidSelection = (field: MissingField, ids: readonly string[]): boolean 
   ids.length >= (field.min ?? 0) &&
   ids.length <= (field.max ?? Number.POSITIVE_INFINITY);
 
+const withoutSegments = (value: unknown, segments: readonly PathSegment[]): unknown => {
+  const [head, ...rest] = segments;
+  if (head === undefined || typeof value !== 'object' || value === null) {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map((item, index) => (index === head ? withoutSegments(item, rest) : item));
+  }
+  return Object.fromEntries(
+    Object.entries(value).flatMap(([key, child]) => {
+      if (key !== head) {
+        return [[key, child]];
+      }
+      return rest.length === 0 ? [] : [[key, withoutSegments(child, rest)]];
+    }),
+  );
+};
+
+const withoutRequirementValues = (input: unknown, patterns: readonly string[]): unknown =>
+  patterns
+    .flatMap((pattern) => expandPattern(pattern, input))
+    .reduce((current, path) => withoutSegments(current, parsePath(path)), input);
+
 export const createRequirementsStage = <TPrincipal>(config: {
   readonly probes: ReadonlyMap<string, RequirementProbe<TPrincipal>>;
   readonly budgetMs: number;
@@ -40,17 +69,18 @@ export const createRequirementsStage = <TPrincipal>(config: {
       return next();
     }
     const answers = context.get('answers');
+    const unfilled = withoutRequirementValues(context.get('resolvedInput'), probe.paths);
     let fields: readonly MissingField[];
     try {
       fields = await probe.probe(
         context.get('principal'),
-        { ...draft, input: context.get('resolvedInput') },
+        { ...draft, input: unfilled },
         { signal: context.signal },
       );
     } catch (error) {
       return unavailableUnlessAborted(context.signal, error);
     }
-    let input = context.get('resolvedInput');
+    let input = unfilled;
     const unanswered: MissingField[] = [];
     const consumed: string[] = [];
     for (const field of fields) {

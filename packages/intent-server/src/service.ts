@@ -14,6 +14,7 @@ import type {
   IntentEvent,
   Interpretation,
   InterpretationInput,
+  InterpretationOrigin,
   Interpreter,
   Outcome,
   PipelineBuilder,
@@ -81,6 +82,7 @@ export interface InterpretationService<TPrincipal> {
 }
 
 const PIPELINE_NAME = 'interpretation';
+const UNTRUSTED_ORIGIN: InterpretationOrigin = 'interpreter';
 
 const settledEvent = (outcome: Outcome<Interpretation>): IntentEvent => {
   if (!outcome.ok) {
@@ -110,7 +112,7 @@ const seedFor = <TPrincipal>(
         principal,
         draft: input.continuation.draft,
         answers: input.continuation.answers,
-        origin: input.origin,
+        origin: UNTRUSTED_ORIGIN,
       }
     : { input, principal };
 
@@ -131,6 +133,9 @@ export function createInterpretationService<TPrincipal, TRole extends string>(
     capabilities: config.capabilities,
     schema: config.schema,
     resolverEntities: config.resolvers.map(({ entity }) => entity),
+    requirementPaths: new Map(
+      (config.probes ?? []).map((probe) => [probe.capabilityId, probe.paths]),
+    ),
     normalize,
   });
   const base = createPipelineBuilder<InterpretationState<TPrincipal>, Interpretation>({

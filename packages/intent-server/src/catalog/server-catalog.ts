@@ -2,10 +2,12 @@ import {
   IntentDefinitionError,
   foldText,
   jsonSchemaLeaves,
+  parsePath,
   relaxEntityPaths,
   validateDescriptor,
 } from '@jcsoftdev/intent-core';
 import type {
+  PathSegment,
   AnyDescriptor,
   CapabilityManifestEntry,
   JsonObject,
@@ -37,6 +39,7 @@ export interface ServerCatalogConfig {
   readonly capabilities: readonly AnyDescriptor[];
   readonly schema: SchemaAdapter;
   readonly resolverEntities: readonly string[];
+  readonly requirementPaths?: ReadonlyMap<string, readonly string[]>;
   readonly normalize: (text: string) => string;
 }
 
@@ -202,14 +205,68 @@ const compilePatterns = (
   );
 };
 
+const assertRequirementPaths = (
+  descriptor: AnyDescriptor,
+  schema: JsonObject,
+  paths: readonly string[],
+): void => {
+  const leafPaths = jsonSchemaLeaves(schema).map((leaf) => leaf.path);
+  for (const path of paths) {
+    const exists = leafPaths.some(
+      (leaf) => leaf === path || leaf.startsWith(`${path}[]`) || leaf.startsWith(`${path}.`),
+    );
+    if (!exists) {
+      throw new IntentDefinitionError('INVALID_PATH', `${descriptor.id}:${path}`);
+    }
+  }
+};
+
+const isJsonObject = (value: unknown): value is JsonObject =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const omitPath = (node: JsonObject, segments: readonly PathSegment[]): JsonObject => {
+  const [head, ...rest] = segments;
+  if (head === undefined) {
+    return node;
+  }
+  if (head === WILDCARD) {
+    return isJsonObject(node.items) ? { ...node, items: omitPath(node.items, rest) } : node;
+  }
+  const properties = node.properties;
+  if (typeof head !== 'string' || !isJsonObject(properties)) {
+    return node;
+  }
+  if (rest.length > 0) {
+    const child = properties[head];
+    return isJsonObject(child)
+      ? { ...node, properties: { ...properties, [head]: omitPath(child, rest) } }
+      : node;
+  }
+  const kept = Object.fromEntries(Object.entries(properties).filter(([name]) => name !== head));
+  const { required, ...others } = node;
+  return {
+    ...others,
+    properties: kept,
+    ...(Array.isArray(required) ? { required: required.filter((name) => name !== head) } : {}),
+  };
+};
+
+const omitPaths = (schema: JsonObject, paths: readonly string[]): JsonObject =>
+  paths.reduce((current, path) => omitPath(current, parsePath(path)), schema);
+
 const buildEntry = (config: ServerCatalogConfig, descriptor: AnyDescriptor): CatalogEntry => {
   validateDescriptor(descriptor);
   const rawSchema = config.schema.toJsonSchema(descriptor.input);
   assertIdLeavesAreEntities(descriptor, rawSchema);
   assertResolvers(descriptor, new Set(config.resolverEntities));
-  const inputJsonSchema = relaxEntityPaths(
-    rawSchema,
-    descriptor.entities.map(({ path }) => path),
+  const requirementPaths = config.requirementPaths?.get(descriptor.id) ?? [];
+  assertRequirementPaths(descriptor, rawSchema, requirementPaths);
+  const inputJsonSchema = omitPaths(
+    relaxEntityPaths(
+      rawSchema,
+      descriptor.entities.map(({ path }) => path),
+    ),
+    requirementPaths,
   );
   const slots = buildSlotIndex(descriptor, inputJsonSchema);
   return {

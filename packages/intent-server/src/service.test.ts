@@ -119,6 +119,13 @@ const DISH_RECORDS: readonly EntityRecord[] = [
 const TERRACE_TABLE: EntityRecord = { id: 'tbl-terraza-3', label: 'Mesa 3', detail: 'Terraza' };
 const HALL_TABLE: EntityRecord = { id: 'tbl-salon-3', label: 'Mesa 3', detail: 'Salón' };
 
+const MODIFIER_RECORDS: readonly (ClosedOption & { readonly available: boolean })[] = [
+  { id: 'opt-papas', label: 'Papas fritas', available: true },
+  { id: 'opt-ensalada', label: 'Ensalada', available: true },
+  { id: 'opt-yuca', label: 'Yuca', available: true },
+  { id: 'opt-brocoli', label: 'Brócoli', available: false },
+];
+
 const MODIFIER_OPTIONS: readonly ClosedOption[] = [
   { id: 'opt-papas', label: 'Papas fritas' },
   { id: 'opt-ensalada', label: 'Ensalada' },
@@ -127,8 +134,9 @@ const MODIFIER_OPTIONS: readonly ClosedOption[] = [
 
 const milanesaProbe: RequirementProbe<Principal> = {
   capabilityId: 'orders.create',
-  probe: async (_principal, draft) => {
-    return getAtPath(draft.input, 'lines[0].offeringId') === 'dish-milanesa'
+  paths: ['lines[].modifiers'],
+  probe: async (_principal, draft) =>
+    getAtPath(draft.input, 'lines[0].offeringId') === 'dish-milanesa'
       ? [
           {
             path: 'lines[0].modifiers',
@@ -136,11 +144,13 @@ const milanesaProbe: RequirementProbe<Principal> = {
             prompt: 'Guarnición',
             min: 1,
             max: 1,
-            options: MODIFIER_OPTIONS,
+            options: MODIFIER_RECORDS.filter(({ available }) => available).map(({ id, label }) => ({
+              id,
+              label,
+            })),
           },
         ]
-      : [];
-  },
+      : [],
 };
 
 const noInterpretation = (): InterpreterResult => ({ status: 'unsupported' });
@@ -262,7 +272,11 @@ describe('interpretation service', () => {
         ],
       },
     });
-    const ids = MODIFIER_OPTIONS.map(({ id }) => id);
+    const ids =
+      outcome.ok && outcome.value.status === 'incomplete'
+        ? (outcome.value.missing[0]?.options ?? []).map(({ id }) => id)
+        : [];
+    expect(ids).toEqual(['opt-papas', 'opt-ensalada', 'opt-yuca']);
     expect(ids).not.toContain('opt-brocoli');
   });
 
@@ -290,7 +304,7 @@ describe('interpretation service', () => {
           },
         },
         summary: 'Milanesa · Mesa 3',
-        source: 'deterministic',
+        source: 'interpreter',
       },
     });
     expect(interpreter.calls()).toHaveLength(0);
@@ -476,6 +490,100 @@ describe('interpretation service', () => {
     expect(outcome).toEqual({
       ok: false,
       failure: { stage: 'resolution', code: 'INVALID_INPUT', retryable: false },
+    });
+  });
+
+  test('P1: an option id placed in the client draft is stripped and never reaches a plan', async () => {
+    const { service } = harness();
+    const outcome = await service.interpret(
+      waiter,
+      continuation(
+        { tableId: '3', lines: [{ offeringId: 'arroz con pollo', modifiers: ['opt-foreign'] }] },
+        {},
+      ),
+      { signal },
+    );
+    expect(outcome).toMatchObject({
+      ok: true,
+      value: {
+        status: 'complete',
+        draft: { input: { lines: [{ offeringId: 'dish-arroz' }] } },
+      },
+    });
+    expect(JSON.stringify(outcome)).not.toContain('opt-foreign');
+  });
+
+  test('a stripped pre-filled value leads to incomplete asking that requirement field', async () => {
+    const { service } = harness();
+    const outcome = await service.interpret(
+      waiter,
+      continuation(
+        { tableId: '3', lines: [{ offeringId: 'milanesa', modifiers: ['opt-foreign'] }] },
+        {},
+      ),
+      { signal },
+    );
+    expect(outcome).toMatchObject({
+      ok: true,
+      value: {
+        status: 'incomplete',
+        missing: [{ path: 'lines[0].modifiers', reason: 'requirement', options: MODIFIER_OPTIONS }],
+      },
+    });
+  });
+
+  test('P10: an option id emitted by the interpreter is dropped and the manifest hides the requirement path', async () => {
+    const { interpreter, service } = harness({
+      script: () => ({
+        status: 'proposed',
+        proposals: [
+          {
+            capabilityId: 'orders.create',
+            slots: { dish: 'arroz con pollo', table: '3', modifiers: 'opt-foreign' },
+            confidence: 0.9,
+          },
+        ],
+      }),
+    });
+    const outcome = await service.interpret(waiter, utterance('quiero algo rico en la terraza'), {
+      signal,
+    });
+    expect(JSON.stringify(outcome)).not.toContain('opt-foreign');
+    expect(outcome).toMatchObject({
+      ok: true,
+      value: { status: 'complete', source: 'interpreter' },
+    });
+    const manifest = interpreter.calls()[0]?.catalog.find(({ id }) => id === 'orders.create');
+    expect(JSON.stringify(manifest?.inputJsonSchema)).not.toContain('modifiers');
+    expect(JSON.stringify(manifest?.inputJsonSchema)).toContain('quantity');
+  });
+
+  test('a requirement path missing from the input schema fails at creation with INVALID_PATH', () => {
+    const create = (): unknown =>
+      createInterpretationService<Principal, Role>({
+        capabilities: descriptors,
+        schema: createZodSchemaAdapter(),
+        rolesOf: (principal) => principal,
+        resolvers: [
+          createInMemoryEntityResolver<Principal>({ entity: 'dish', records: () => [] }),
+          createInMemoryEntityResolver<Principal>({ entity: 'table', records: () => [] }),
+          createInMemoryEntityResolver<Principal>({ entity: 'line', records: () => [] }),
+        ],
+        probes: [{ ...milanesaProbe, paths: ['lines[].garnish'] }],
+      });
+    expect(create).toThrow('INVALID_PATH');
+  });
+
+  test('the client origin never becomes the plan source', async () => {
+    const { service } = harness();
+    const outcome = await service.interpret(
+      waiter,
+      continuation({ tableId: '3', lines: [{ offeringId: 'arroz con pollo' }] }, {}),
+      { signal },
+    );
+    expect(outcome).toMatchObject({
+      ok: true,
+      value: { status: 'complete', source: 'interpreter' },
     });
   });
 
