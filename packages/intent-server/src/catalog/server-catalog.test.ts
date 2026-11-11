@@ -192,4 +192,54 @@ describe('createServerCatalog', () => {
       .find((slots) => slots !== undefined);
     expect(matched).toEqual({ dish: 'arroz con pollo', table: '3' });
   });
+
+  test('names the normalizer-rewritten word when a literal is unstable', () => {
+    const unstable = { ...cashShiftClose, id: 'cash.shift.fill', patterns: ['haz {note}'] };
+    const message = (): string => {
+      try {
+        catalogOf([unstable]);
+        return '';
+      } catch (error) {
+        return (error as Error).message;
+      }
+    };
+    expect(message()).toContain('"haz"');
+    expect(message()).toContain('normalizer');
+    expect(message()).not.toContain('at most 4 slots');
+  });
+
+  test('id-shaped leaves and resolvers are not required for agent-never capabilities', () => {
+    const uiOnly = {
+      ...cashShiftClose,
+      id: 'cash.shift.audit',
+      agent: 'never',
+      input: z.object({ shiftId: z.uuid() }),
+      entities: [{ path: 'shiftId', entity: 'shift' }],
+    } as const;
+    expect(reasonOf(() => catalogOf([uiOnly], []))).toBeUndefined();
+    expect(reasonOf(() => catalogOf([{ ...uiOnly, agent: 'allowed' }], []))).toBe(
+      'MISSING_RESOLVER',
+    );
+    const unDeclared = { ...uiOnly, entities: [] };
+    expect(reasonOf(() => catalogOf([unDeclared], []))).toBeUndefined();
+    expect(reasonOf(() => catalogOf([{ ...unDeclared, agent: 'allowed' }], []))).toBe(
+      'INVALID_SCHEMA',
+    );
+  });
+
+  test('equal literal length keeps declaration order', () => {
+    const twoSlots = {
+      ...cashShiftClose,
+      id: 'cash.shift.tag',
+      input: z.object({ note: z.string(), tag: z.string() }),
+    };
+    const first = '{note} caja {tag}';
+    const second = '{tag} caja {note}';
+    const winner = (patterns: readonly string[]) =>
+      catalogOf([{ ...twoSlots, patterns }])
+        .entries.get('cash.shift.tag')
+        ?.patterns.map((pattern) => pattern.match('ana caja beto'))[0];
+    expect(winner([first, second])).toEqual({ note: 'ana', tag: 'beto' });
+    expect(winner([second, first])).toEqual({ tag: 'ana', note: 'beto' });
+  });
 });

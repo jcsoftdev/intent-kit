@@ -1,5 +1,6 @@
 import {
   IntentDefinitionError,
+  foldText,
   jsonSchemaLeaves,
   relaxEntityPaths,
   validateDescriptor,
@@ -39,8 +40,10 @@ export interface ServerCatalogConfig {
   readonly normalize: (text: string) => string;
 }
 
-const PATTERN_LIMITS =
-  'patterns allow at most 4 slots, at most 2 text slots and no slot inside (a|b)';
+const SLOT_CAPS = 'patterns allow at most 4 slots, at most 2 text slots and no slot inside (a|b)';
+const SLOT_TOKEN = /\{[^{}]*\}/g;
+const SLOT_IN_ALTERNATION = /\([^()]*\{/;
+const LITERAL_SPLIT = /[\s()|[\]?]+/;
 const ID_SUFFIX = /Id$/;
 const NON_LITERAL = /\{[^{}]*\}|[\s()|[\]?]/g;
 const WILDCARD = '[]';
@@ -95,6 +98,9 @@ const idShapedPaths = (schema: JsonObject): ReadonlySet<string> =>
   ]);
 
 const assertIdLeavesAreEntities = (descriptor: AnyDescriptor, schema: JsonObject): void => {
+  if (descriptor.agent === 'never') {
+    return;
+  }
   const entityPaths = new Set(descriptor.entities.map(({ path }) => path));
   for (const path of idShapedPaths(schema)) {
     if (!entityPaths.has(path)) {
@@ -107,6 +113,9 @@ const assertIdLeavesAreEntities = (descriptor: AnyDescriptor, schema: JsonObject
 };
 
 const assertResolvers = (descriptor: AnyDescriptor, resolvers: ReadonlySet<string>): void => {
+  if (descriptor.agent === 'never') {
+    return;
+  }
   for (const { entity } of descriptor.entities) {
     if (!resolvers.has(entity)) {
       throw new IntentDefinitionError('MISSING_RESOLVER', `${descriptor.id}:${entity}`);
@@ -135,6 +144,40 @@ const slotKindResolver =
     return target.leafType === 'number' || target.leafType === 'integer' ? 'number' : 'text';
   };
 
+const slotNamesOf = (template: string): readonly string[] =>
+  (template.match(SLOT_TOKEN) ?? []).map((token) => token.slice(1, -1).replace(/\?$/, ''));
+
+const unstableWordOf = (
+  template: string,
+  normalize: (text: string) => string,
+): string | undefined =>
+  template
+    .replace(SLOT_TOKEN, ' ')
+    .split(LITERAL_SPLIT)
+    .map(foldText)
+    .find((word) => word !== '' && normalize(word) !== word);
+
+const exceedsSlotCaps = (template: string, kindOf: (slot: string) => SlotKind): boolean => {
+  const names = slotNamesOf(template);
+  const textSlots = names.filter((name) => kindOf(name) === 'text');
+  return names.length > 4 || textSlots.length > 2 || SLOT_IN_ALTERNATION.test(template);
+};
+
+const explainInvalidPattern = (
+  template: string,
+  kindOf: (slot: string) => SlotKind,
+  normalize: (text: string) => string,
+): string => {
+  const unstable = unstableWordOf(template, normalize);
+  if (unstable !== undefined) {
+    return `the word "${unstable}" is rewritten by the normalizer (a leading filler or a number word), so a pattern literal can never match it`;
+  }
+  if (exceedsSlotCaps(template, kindOf)) {
+    return SLOT_CAPS;
+  }
+  return 'the pattern is malformed (unbalanced brackets, empty alternatives, a repeated slot or adjacent text slots)';
+};
+
 const compilePatterns = (
   descriptor: AnyDescriptor,
   inputJsonSchema: JsonObject,
@@ -150,7 +193,7 @@ const compilePatterns = (
         if (error instanceof IntentDefinitionError && error.reason === 'INVALID_PATTERN') {
           throw new IntentDefinitionError(
             'INVALID_PATTERN',
-            `${descriptor.id}: ${template} (${PATTERN_LIMITS})`,
+            `${descriptor.id}: ${template} (${explainInvalidPattern(template, kindOf, normalize)})`,
           );
         }
         throw error;

@@ -13,19 +13,10 @@ const unsupported = (copy: InterpretationCopy, view: ServerCatalogView): Interpr
   suggestions: copy.suggestions(view),
 });
 
-const bestPerCapability = (
-  proposals: readonly Proposal[],
-  view: ServerCatalogView,
-): readonly Proposal[] => {
-  const best = new Map<string, Proposal>();
-  for (const proposal of proposals) {
-    const known = best.get(proposal.capabilityId);
-    if (view.get(proposal.capabilityId) && (!known || proposal.confidence > known.confidence)) {
-      best.set(proposal.capabilityId, proposal);
-    }
-  }
-  return [...best.values()].sort((a, b) => b.confidence - a.confidence);
-};
+const rankInView = (proposals: readonly Proposal[], view: ServerCatalogView): readonly Proposal[] =>
+  proposals
+    .filter((proposal) => view.get(proposal.capabilityId))
+    .sort((a, b) => b.confidence - a.confidence);
 
 const isDecisive = (ranked: readonly Proposal[]): boolean => {
   const [top, second] = ranked;
@@ -38,6 +29,47 @@ const isDecisive = (ranked: readonly Proposal[]): boolean => {
       top.confidence - second.confidence >= MIN_CONFIDENCE_GAP)
   );
 };
+
+const contendersOf = (ranked: readonly Proposal[]): readonly Proposal[] => {
+  const [top] = ranked;
+  if (!top || top.confidence < MIN_TOP_CONFIDENCE) {
+    return ranked;
+  }
+  return ranked.filter((proposal) => top.confidence - proposal.confidence < MIN_CONFIDENCE_GAP);
+};
+
+const sameSlotValue = (a: Proposal['slots'][string], b: Proposal['slots'][string] | undefined) =>
+  JSON.stringify(a) === JSON.stringify(b);
+
+const agreedSlots = (contenders: readonly Proposal[]): Proposal['slots'] => {
+  const [top] = contenders;
+  return Object.fromEntries(
+    Object.entries(top?.slots ?? {}).filter(([key, value]) =>
+      contenders.every((other) => sameSlotValue(value, other.slots[key])),
+    ),
+  );
+};
+
+const sharedCapability = (contenders: readonly Proposal[]): Proposal | undefined => {
+  const [top] = contenders;
+  return top && contenders.every((other) => other.capabilityId === top.capabilityId)
+    ? { ...top, slots: agreedSlots(contenders) }
+    : undefined;
+};
+
+const capabilityCandidates = (
+  contenders: readonly Proposal[],
+  view: ServerCatalogView,
+): Interpretation => ({
+  status: 'ambiguous',
+  candidates: [...new Set(contenders.map(({ capabilityId }) => capabilityId))].map(
+    (capabilityId) => ({
+      kind: 'capability',
+      capabilityId,
+      label: view.get(capabilityId)?.descriptor.description ?? capabilityId,
+    }),
+  ),
+});
 
 export const createInterpretStage = <TPrincipal>(config: {
   readonly interpreter?: Interpreter;
@@ -58,7 +90,7 @@ export const createInterpretStage = <TPrincipal>(config: {
       return next();
     }
     const view = context.get('catalog');
-    if (!config.interpreter) {
+    if (view.entries.length === 0 || !config.interpreter) {
       return { ok: true, value: unsupported(config.copy, view) };
     }
     let result;
@@ -82,25 +114,16 @@ export const createInterpretStage = <TPrincipal>(config: {
         failure: { stage: 'interpretation', code: 'INTERPRETER_UNAVAILABLE', retryable: true },
       };
     }
-    const ranked = result.status === 'proposed' ? bestPerCapability(result.proposals, view) : [];
+    const ranked = result.status === 'proposed' ? rankInView(result.proposals, view) : [];
     const [top] = ranked;
     if (!top) {
       return { ok: true, value: unsupported(config.copy, view) };
     }
-    if (!isDecisive(ranked)) {
-      return {
-        ok: true,
-        value: {
-          status: 'ambiguous',
-          candidates: ranked.map(({ capabilityId }) => ({
-            kind: 'capability',
-            capabilityId,
-            label: view.get(capabilityId)?.descriptor.description ?? capabilityId,
-          })),
-        },
-      };
+    const chosen = isDecisive(ranked) ? top : sharedCapability(contendersOf(ranked));
+    if (!chosen) {
+      return { ok: true, value: capabilityCandidates(contendersOf(ranked), view) };
     }
-    context.set('proposal', top);
+    context.set('proposal', chosen);
     context.set('origin', 'interpreter');
     return next();
   },

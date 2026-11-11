@@ -169,8 +169,10 @@ const harness = (
     .use(createInterpretStage({ interpreter, copy: defaultInterpretationCopy, budgetMs: 4000 }))
     .use(createDraftStage(defaultInterpretationCopy))
     .build();
-  const run = (seed: Partial<State>): Promise<Outcome<Interpretation>> =>
-    pipeline.run(seed, { signal });
+  const run = (
+    seed: Partial<State>,
+    runSignal: AbortSignal = signal,
+  ): Promise<Outcome<Interpretation>> => pipeline.run(seed, { signal: runSignal });
   return { clock, interpreter, run };
 };
 
@@ -340,5 +342,70 @@ describe('front interpretation stages', () => {
     expect(interpreter.calls()[0]?.catalog.map((entry) => entry.id)).toEqual([
       'kitchen.lines.markReady',
     ]);
+  });
+
+  test('same-capability proposals that disagree on a slot drop that slot instead of guessing', async () => {
+    const { run } = harness(() =>
+      proposed(
+        { capabilityId: 'orders.create', slots: { dish: 'arroz', table: '3' }, confidence: 0.7 },
+        { capabilityId: 'orders.create', slots: { dish: 'arroz', table: '8' }, confidence: 0.65 },
+      ),
+    );
+    const outcome = await run({ input: utterance('quiero algo'), principal: waiter });
+    expect(outcome).toMatchObject({ ok: true, value: { status: 'incomplete' } });
+    expect(outcome).toMatchObject({
+      value: { draft: { capabilityId: 'orders.create', input: { dishId: 'arroz' } } },
+    });
+    expect(JSON.stringify(outcome)).not.toContain('tableId');
+  });
+
+  test('a close runner-up of another capability stays ambiguous', async () => {
+    const { run } = harness(() =>
+      proposed(
+        proposalOf('orders.create', 0.9),
+        proposalOf('orders.create', 0.85),
+        proposalOf('kitchen.lines.markReady', 0.8),
+      ),
+    );
+    const outcome = await run({ input: utterance('quiero algo'), principal: waiter });
+    expect(outcome).toMatchObject({ ok: true, value: { status: 'ambiguous' } });
+  });
+
+  test('interpreter slots reach the draft as text, an id-shaped value stays text and unknown keys are dropped', async () => {
+    const uuid = '9b2f4c1e-8a7d-4b3a-9c1e-2d5f6a7b8c9d';
+    const { run } = harness(() =>
+      proposed({
+        capabilityId: 'orders.create',
+        slots: { table: uuid, dish: 'arroz con pollo', bogus: 'x' },
+        confidence: 0.9,
+      }),
+    );
+    const outcome = await run({ input: utterance('quiero algo'), principal: waiter });
+    expect(outcome).toMatchObject({
+      ok: true,
+      value: { draft: { input: { tableId: uuid, dishId: 'arroz con pollo' } } },
+    });
+    expect(JSON.stringify(outcome)).not.toContain('bogus');
+  });
+
+  test('an empty view settles unsupported without calling the interpreter', async () => {
+    const { interpreter, run } = harness(unsupportedScript);
+    const outcome = await run({
+      input: utterance('cierra la caja', 'cash.shift.close'),
+      principal: waiter,
+    });
+    expect(outcome).toMatchObject({ ok: true, value: { status: 'unsupported' } });
+    expect(interpreter.calls()).toHaveLength(0);
+  });
+
+  test('a caller abort during interpretation settles ABORTED, not INTERPRETER_UNAVAILABLE', async () => {
+    const { clock, run } = harness(() => proposed(proposalOf('orders.create', 0.9)), {
+      delayMs: 3000,
+    });
+    const controller = new AbortController();
+    const pending = run({ input: utterance('quiero algo'), principal: waiter }, controller.signal);
+    await clock.advance(100);
+    controller.abort();
+    expect(await pending).toMatchObject({ ok: false, failure: { code: 'ABORTED' } });
   });
 });
