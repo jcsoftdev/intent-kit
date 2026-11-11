@@ -1,14 +1,6 @@
 import type { Destination, RouterAdapter } from '@jcsoftdev/intent-core';
 import { describe, expect, it } from 'vitest';
-
-const abortedWith = (reason: Error): AbortSignal => {
-  const controller = new AbortController();
-  controller.abort(reason);
-  return controller.signal;
-};
-
-const nextMacrotask = (): Promise<'pending'> =>
-  new Promise((resolve) => setTimeout(() => resolve('pending'), 0));
+import { nextMacrotask } from './abort.js';
 
 export function describeRouterAdapterContract<TRouteId extends string>(
   name: string,
@@ -38,7 +30,9 @@ export function describeRouterAdapterContract<TRouteId extends string>(
       await router.navigate(first, { signal: new AbortController().signal });
       const before = router.currentRoute();
       const reason = new Error('already aborted');
-      await expect(router.navigate(second, { signal: abortedWith(reason) })).rejects.toBe(reason);
+      await expect(router.navigate(second, { signal: AbortSignal.abort(reason) })).rejects.toBe(
+        reason,
+      );
       expect(router.currentRoute()).toEqual(before);
     });
 
@@ -46,9 +40,9 @@ export function describeRouterAdapterContract<TRouteId extends string>(
       const { router, first } = factory();
       await router.navigate(first, { signal: new AbortController().signal });
       const reason = new Error('already aborted');
-      await expect(router.waitUntilReady(first, { signal: abortedWith(reason) })).rejects.toBe(
-        reason,
-      );
+      await expect(
+        router.waitUntilReady(first, { signal: AbortSignal.abort(reason) }),
+      ).rejects.toBe(reason);
     });
 
     it('waitUntilReady for a destination not yet navigated to rejects with the reason within one macrotask of an abort during the call', async () => {
@@ -60,7 +54,7 @@ export function describeRouterAdapterContract<TRouteId extends string>(
         (error: unknown) => error,
       );
       controller.abort(reason);
-      expect(await Promise.race([outcome, nextMacrotask()])).toBe(reason);
+      expect(await Promise.race([outcome, nextMacrotask().then(() => 'pending')])).toBe(reason);
     });
   });
 }

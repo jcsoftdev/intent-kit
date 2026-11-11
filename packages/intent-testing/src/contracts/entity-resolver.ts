@@ -1,5 +1,12 @@
-import type { EntityQuery, EntityResolution, EntityResolver } from '@jcsoftdev/intent-core';
+import type {
+  ClosedOption,
+  Draft,
+  EntityQuery,
+  EntityResolution,
+  EntityResolver,
+} from '@jcsoftdev/intent-core';
 import { describe, expect, it } from 'vitest';
+import { expectAbortHonoredMidCall } from './abort.js';
 
 export interface EntityResolverContractFixture<TPrincipal> {
   readonly resolver: EntityResolver<TPrincipal>;
@@ -7,7 +14,12 @@ export interface EntityResolverContractFixture<TPrincipal> {
   readonly exact: { readonly text: string; readonly variant: string; readonly id: string };
   readonly ambiguous: { readonly text: string; readonly ids: readonly string[] };
   readonly unknown: string;
-  readonly foreign?: { readonly principal: TPrincipal; readonly hiddenIds: readonly string[] };
+  readonly options: {
+    readonly path: string;
+    readonly draft: Draft;
+    readonly ids: readonly string[];
+  };
+  readonly foreign: { readonly principal: TPrincipal; readonly hiddenIds: readonly string[] };
 }
 
 const queryFor = (text: string): EntityQuery => ({ text, hints: {}, scope: 'any' });
@@ -24,6 +36,9 @@ const idsIn = (resolution: EntityResolution): readonly string[] => {
 };
 
 const sorted = (ids: readonly string[]): readonly string[] => [...ids].sort();
+
+const idsOf = (options: readonly ClosedOption[]): readonly string[] =>
+  options.map((option) => option.id);
 
 export function describeEntityResolverContract<TPrincipal>(
   name: string,
@@ -67,9 +82,6 @@ export function describeEntityResolverContract<TPrincipal>(
 
     it('tenant isolation: never returns an id hidden from the foreign principal in found, options or nearest', async () => {
       const { resolver, exact, ambiguous, unknown, foreign } = factory();
-      if (foreign === undefined) {
-        throw new Error('the fixture must provide foreign to verify tenant isolation');
-      }
       expect(foreign.hiddenIds.length).toBeGreaterThan(0);
       const texts = [exact.text, exact.variant, ambiguous.text, unknown];
       for (const text of texts) {
@@ -81,11 +93,48 @@ export function describeEntityResolverContract<TPrincipal>(
     it('with an already-aborted signal rejects with the reason', async () => {
       const { resolver, principal, exact } = factory();
       const reason = new Error('already aborted');
-      const controller = new AbortController();
-      controller.abort(reason);
       await expect(
-        resolver.resolve(principal, queryFor(exact.text), { signal: controller.signal }),
+        resolver.resolve(principal, queryFor(exact.text), { signal: AbortSignal.abort(reason) }),
       ).rejects.toBe(reason);
+    });
+
+    it('with an abort during resolve rejects with the reason or has already resolved within one macrotask', async () => {
+      const { resolver, principal, exact } = factory();
+      await expectAbortHonoredMidCall((abortSignal) =>
+        resolver.resolve(principal, queryFor(exact.text), { signal: abortSignal }),
+      );
+    });
+
+    it('options returns the expected ids for the principal', async () => {
+      const { resolver, principal, options } = factory();
+      const result = await resolver.options(principal, options.path, options.draft, { signal });
+      expect(sorted(idsOf(result))).toEqual(sorted(options.ids));
+    });
+
+    it('tenant isolation: options never contain an id hidden from the foreign principal', async () => {
+      const { resolver, options, foreign } = factory();
+      expect(foreign.hiddenIds.length).toBeGreaterThan(0);
+      const result = await resolver.options(foreign.principal, options.path, options.draft, {
+        signal,
+      });
+      expect(idsOf(result).filter((id) => foreign.hiddenIds.includes(id))).toEqual([]);
+    });
+
+    it('options with an already-aborted signal rejects with the reason', async () => {
+      const { resolver, principal, options } = factory();
+      const reason = new Error('already aborted');
+      await expect(
+        resolver.options(principal, options.path, options.draft, {
+          signal: AbortSignal.abort(reason),
+        }),
+      ).rejects.toBe(reason);
+    });
+
+    it('with an abort during options rejects with the reason or has already resolved within one macrotask', async () => {
+      const { resolver, principal, options } = factory();
+      await expectAbortHonoredMidCall((abortSignal) =>
+        resolver.options(principal, options.path, options.draft, { signal: abortSignal }),
+      );
     });
   });
 }

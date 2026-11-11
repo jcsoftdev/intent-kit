@@ -34,14 +34,11 @@ export function describeSchemaAdapterContract(
     it('validate and missingPaths with an already-aborted signal reject with the reason', async () => {
       const { adapter, schema, valid, missing } = factory();
       const reason = new Error('already aborted');
-      const controller = new AbortController();
-      controller.abort(reason);
-      await expect(adapter.validate(schema, valid, { signal: controller.signal })).rejects.toBe(
+      const aborted = AbortSignal.abort(reason);
+      await expect(adapter.validate(schema, valid, { signal: aborted })).rejects.toBe(reason);
+      await expect(adapter.missingPaths(schema, missing.value, { signal: aborted })).rejects.toBe(
         reason,
       );
-      await expect(
-        adapter.missingPaths(schema, missing.value, { signal: controller.signal }),
-      ).rejects.toBe(reason);
     });
   });
 }

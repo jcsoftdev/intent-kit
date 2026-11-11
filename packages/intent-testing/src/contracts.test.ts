@@ -61,10 +61,16 @@ describeEntityResolverContract<string>('in-memory', () => ({
     entity: 'dish',
     records: (tenant) => recordsByTenant[tenant] ?? [],
     normalize: foldText,
+    options: (tenant) => (recordsByTenant[tenant] ?? []).map(({ id, label }) => ({ id, label })),
   }),
   principal: 'a',
   exact: { text: 'Lomo saltado', variant: 'LOMO SALTADÓ', id: 'a-1' },
   ambiguous: { text: 'arroz', ids: ['a-2', 'a-3'] },
+  options: {
+    path: 'dish',
+    draft: { capabilityId: 'order.add', version: 1, input: {} },
+    ids: ['a-1', 'a-2', 'a-3'],
+  },
   unknown: 'pizza',
   foreign: { principal: 'b', hiddenIds: ['a-1', 'a-2', 'a-3'] },
 }));

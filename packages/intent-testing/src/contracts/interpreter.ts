@@ -1,5 +1,6 @@
 import type { InterpretRequest, Interpreter, Proposal } from '@jcsoftdev/intent-core';
 import { describe, expect, it } from 'vitest';
+import { expectAbortHonoredMidCall } from './abort.js';
 
 const isSlotValue = (value: unknown): boolean =>
   typeof value === 'string' ||
@@ -32,17 +33,22 @@ export function describeInterpreterContract(
       if (result.status === 'proposed') {
         expect(Array.isArray(result.proposals)).toBe(true);
         result.proposals.forEach(expectWellFormedProposal);
+      } else {
+        expect(result).toEqual({ status: 'unsupported' });
       }
     });
 
     it('with an already-aborted signal rejects with the reason', async () => {
       const { interpreter, request } = factory();
       const reason = new Error('already aborted');
-      const controller = new AbortController();
-      controller.abort(reason);
-      await expect(interpreter.interpret(request, { signal: controller.signal })).rejects.toBe(
-        reason,
-      );
+      await expect(
+        interpreter.interpret(request, { signal: AbortSignal.abort(reason) }),
+      ).rejects.toBe(reason);
+    });
+
+    it('with an abort during the call rejects with the reason or has already resolved within one macrotask', async () => {
+      const { interpreter, request } = factory();
+      await expectAbortHonoredMidCall((signal) => interpreter.interpret(request, { signal }));
     });
   });
 }

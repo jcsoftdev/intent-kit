@@ -14,10 +14,11 @@ export function describeEffectContract<TInput>(
   describe(`${name} effect contract`, () => {
     it('with an already-aborted signal resolves an ABORTED execution failure and causes no side effects', async () => {
       const { effect, input, sideEffects } = factory();
-      const controller = new AbortController();
-      controller.abort(new Error('already aborted'));
       const before = sideEffects();
-      const result = await effect.run(input, { signal: controller.signal, planId: PLAN_ID });
+      const result = await effect.run(input, {
+        signal: AbortSignal.abort(new Error('already aborted')),
+        planId: PLAN_ID,
+      });
       expect(result).toEqual({
         ok: false,
         failure: { stage: 'execution', code: 'ABORTED', retryable: true },
