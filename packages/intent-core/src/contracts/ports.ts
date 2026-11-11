@@ -102,8 +102,16 @@ export interface FormBinding<TInput> {
 
 export interface SchemaAdapter {
   toJsonSchema(schema: StandardSchemaV1): JsonObject;
-  validate<T>(schema: StandardSchemaV1<unknown, T>, value: unknown): Promise<Outcome<T>>;
-  missingPaths(schema: StandardSchemaV1, value: unknown): Promise<readonly string[]>;
+  validate<T>(
+    schema: StandardSchemaV1<unknown, T>,
+    value: unknown,
+    options: { signal: AbortSignal },
+  ): Promise<Outcome<T>>;
+  missingPaths(
+    schema: StandardSchemaV1,
+    value: unknown,
+    options: { signal: AbortSignal },
+  ): Promise<readonly string[]>;
 }
 
 export type Decision =

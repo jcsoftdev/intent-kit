@@ -11,7 +11,7 @@ export interface EntityParam<TPath extends string = string> {
   readonly scope?: 'any' | 'own';
 }
 
-type DepthStep = [never, 0, 1, 2, 3, 4, 5];
+type DepthStep = [never, never, 0, 1, 2, 3, 4];
 
 type ChildPaths<TKey extends string, TValue, TDepth extends number> =
   NonNullable<TValue> extends readonly (infer TElement)[]
@@ -27,7 +27,9 @@ type PathsOf<T, TDepth extends number> = [TDepth] extends [never]
     ? never
     : T extends object
       ? {
-          [K in keyof T & string]-?: K | ChildPaths<K, T[K], TDepth>;
+          [K in keyof T & string]-?: T[K] extends (...args: never[]) => unknown
+            ? never
+            : K | ChildPaths<K, T[K], TDepth>;
         }[keyof T & string]
       : never;
 
@@ -61,8 +63,10 @@ export interface CapabilityDescriptor<
   TRouteId extends string,
   TInput = unknown,
   TOutput = unknown,
+  TId extends string = string,
+  TEntityPath extends string = string,
 > {
-  readonly id: string;
+  readonly id: TId;
   readonly version: number;
   readonly kind: CapabilityKind;
   readonly agent: AgentExposure;
@@ -73,7 +77,7 @@ export interface CapabilityDescriptor<
   readonly scope: CapabilityScope;
   readonly input: StandardSchemaV1<unknown, TInput>;
   readonly output?: StandardSchemaV1<unknown, TOutput>;
-  readonly entities: readonly EntityParam[];
+  readonly entities: readonly EntityParam<TEntityPath>[];
   readonly risk: RiskLevel;
   readonly confirmation: ConfirmationPolicy;
   readonly reversibility: Reversibility;
@@ -88,17 +92,15 @@ export type CapabilityDefinition<
   TRouteId extends string,
   TInput = unknown,
   TOutput = unknown,
-> = Omit<CapabilityDescriptor<TRole, TRouteId, TInput, TOutput>, 'entities'> & {
-  readonly entities: readonly EntityParam<InputPath<TInput>>[];
-};
+  TId extends string = string,
+> = CapabilityDescriptor<TRole, TRouteId, TInput, TOutput, TId, InputPath<TInput>>;
 
 export type AnyDescriptor = CapabilityDescriptor<string, string, unknown, unknown>;
 
 export type Unregister = () => void;
 
 export function createCapabilityDefiner<TRole extends string, TRouteId extends string>() {
-  return <TInput, TOutput>(
-    definition: CapabilityDefinition<TRole, TRouteId, TInput, TOutput>,
-  ): CapabilityDescriptor<TRole, TRouteId, TInput, TOutput> =>
-    definition as CapabilityDescriptor<TRole, TRouteId, TInput, TOutput>;
+  return <const TId extends string, TInput, TOutput>(
+    definition: CapabilityDefinition<TRole, TRouteId, TInput, TOutput, TId>,
+  ): CapabilityDescriptor<TRole, TRouteId, TInput, TOutput, TId> => definition;
 }

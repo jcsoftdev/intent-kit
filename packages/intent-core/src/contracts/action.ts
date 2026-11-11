@@ -43,5 +43,5 @@ export interface CapabilityMessages {
   confirm(context: { readonly input: unknown; readonly heard?: string }): string;
 }
 
-export type MessageCatalog = Readonly<Record<string, CapabilityMessages>>;
+export type MessageCatalog<TId extends string = string> = Readonly<Record<TId, CapabilityMessages>>;
 export type FailureMessages = Readonly<Record<FailureCode, string>>;
