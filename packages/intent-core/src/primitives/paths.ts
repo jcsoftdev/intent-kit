@@ -4,11 +4,12 @@ import type { StandardSchemaV1 } from '../contracts/index.js';
 export type PathSegment = string | number | '[]';
 
 const PART_PATTERN = /^([A-Za-z_$][\w$-]*)((?:\[\d*\])*)$/;
+const FORBIDDEN_NAMES: ReadonlySet<string> = new Set(['__proto__', 'constructor', 'prototype']);
 const INDEX_PATTERN = /\[(\d*)\]/g;
 
 const parsePart = (part: string, path: string): readonly PathSegment[] => {
   const match = PART_PATTERN.exec(part);
-  if (!match) {
+  if (!match || FORBIDDEN_NAMES.has(match[1] as string)) {
     throw new IntentDefinitionError('INVALID_PATH', path);
   }
   const indices = [...(match[2] ?? '').matchAll(INDEX_PATTERN)].map((index): PathSegment =>

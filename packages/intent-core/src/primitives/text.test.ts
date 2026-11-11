@@ -21,12 +21,31 @@ describe('text', () => {
     expect(matchClosedOption('con yuca', options)?.id).toBe('yuca');
   });
 
-  test('matchClosedOption returns undefined when two options match', () => {
+  test('matchClosedOption returns undefined when the text names two options', () => {
+    expect(matchClosedOption('con papas o yuca', options)).toBeUndefined();
     expect(matchClosedOption('con papas fritas o yuca', options)).toBeUndefined();
+    expect(matchClosedOption('arroz con pollo con papas o yuca', options)).toBeUndefined();
+    expect(matchClosedOption('papas, no yuca', options)).toBeUndefined();
   });
 
-  test('matchClosedOption returns undefined when no option matches', () => {
-    expect(matchClosedOption('con papas', options)).toBeUndefined();
+  test('matchClosedOption accepts a partial mention of a single option', () => {
+    expect(matchClosedOption('con papas', options)?.id).toBe('papas');
+  });
+
+  test('matchClosedOption never picks a negated option', () => {
+    expect(matchClosedOption('sin yuca', options)).toBeUndefined();
+  });
+
+  test('matchClosedOption returns undefined when nothing is mentioned', () => {
+    expect(matchClosedOption('lo que sea', options)).toBeUndefined();
+  });
+
+  test('a full label wins over an option whose tokens it covers', () => {
+    const nested = [
+      { id: 'arroz', label: 'Arroz' },
+      { id: 'arroz-pollo', label: 'Arroz con pollo' },
+    ];
+    expect(matchClosedOption('quiero arroz con pollo', nested)?.id).toBe('arroz-pollo');
   });
 
   test('an exact folded equality wins over token matches', () => {

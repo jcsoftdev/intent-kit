@@ -20,7 +20,16 @@ describe('paths', () => {
     expect(formatPath(parsePath(path))).toBe(path);
   });
 
-  test.each(['lines[x]', 'a..b', '', '.a', 'a.'])('parsePath rejects %j', (path) => {
+  test.each([
+    'lines[x]',
+    'a..b',
+    '',
+    '.a',
+    'a.',
+    '__proto__.tableId',
+    'a.constructor',
+    'prototype',
+  ])('parsePath rejects %j', (path) => {
     expect(() => parsePath(path)).toThrow(IntentDefinitionError);
     expect(() => parsePath(path)).toThrow('INVALID_PATH');
   });
@@ -53,6 +62,11 @@ describe('paths', () => {
     const next = setAtPath(original, 'lines[0].qty', 2);
     expect(next).toEqual({ lines: [{ qty: 2 }], tableId: 't' });
     expect(original.lines[0]?.qty).toBe(1);
+  });
+
+  test('setAtPath refuses __proto__ and leaves Object.prototype untouched', () => {
+    expect(() => setAtPath({}, '__proto__.tableId', 'x')).toThrow('INVALID_PATH');
+    expect(({} as Record<string, unknown>).tableId).toBeUndefined();
   });
 
   test('overlaps compares paths after replacing indices by []', () => {
