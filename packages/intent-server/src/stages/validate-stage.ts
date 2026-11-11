@@ -35,6 +35,16 @@ export const createValidateStage = <TPrincipal>(config: {
     ) {
       return invalidInputInResolution;
     }
+    const askedPaths = await config.schema.missingPaths(
+      descriptor.input,
+      context.get('resolvedInput'),
+      {
+        signal: context.signal,
+      },
+    );
+    if (answeredPaths.some((path) => !askedPaths.includes(path))) {
+      return invalidInputInResolution;
+    }
     const input = answeredPaths.reduce<unknown>(
       (current, path) => setAtPath(current, path, answers[path]),
       context.get('resolvedInput'),

@@ -447,6 +447,38 @@ describe('interpretation service', () => {
     });
   });
 
+  test('an answer for an unasked optional path is rejected and nothing is applied', async () => {
+    const { service } = harness();
+    const outcome = await service.interpret(
+      waiter,
+      continuation(
+        { tableId: '3', lines: [{ offeringId: 'arroz con pollo' }] },
+        { 'lines[0].modifiers': ['opt-yuca'] },
+      ),
+      { signal },
+    );
+    expect(outcome).toEqual({
+      ok: false,
+      failure: { stage: 'resolution', code: 'INVALID_INPUT', retryable: false },
+    });
+  });
+
+  test('an id-shaped answer for an asked entity path is checked against the options, never copied', async () => {
+    const { service } = harness();
+    const outcome = await service.interpret(
+      waiter,
+      continuation(
+        { tableId: '3', lines: [{ offeringId: 'arroz con pollo' }] },
+        { tableId: 'tbl-foreign' },
+      ),
+      { signal },
+    );
+    expect(outcome).toEqual({
+      ok: false,
+      failure: { stage: 'resolution', code: 'INVALID_INPUT', retryable: false },
+    });
+  });
+
   test('a required field with options from the resolver asks for the first missing path only', async () => {
     const { service } = harness();
     const outcome = await service.interpret(

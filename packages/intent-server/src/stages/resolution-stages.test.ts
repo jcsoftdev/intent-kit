@@ -282,7 +282,7 @@ describe('resolution stages', () => {
     expect(outcome).toEqual(failure('resolution', 'INVALID_INPUT'));
   });
 
-  test('validate applies a non-entity answer and completes the input', async () => {
+  test('validate rejects an answer for a path that was not asked', async () => {
     const stage = createValidateStage({
       schema,
       resolvers: resolvers(),
@@ -295,10 +295,7 @@ describe('resolution stages', () => {
       },
       { signal },
     );
-    expect(outcome).toMatchObject({
-      ok: true,
-      value: { draft: { input: { tableId: 'tbl-3', lines: [], note: 'sin ají' } } },
-    });
+    expect(outcome).toEqual(failure('resolution', 'INVALID_INPUT'));
   });
 
   test('validate refuses a capability missing from the catalog view', async () => {
