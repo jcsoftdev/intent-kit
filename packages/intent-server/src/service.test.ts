@@ -11,6 +11,7 @@ import type {
   EntityResolver,
   InterpretationInput,
   InterpreterResult,
+  MissingField,
   RequirementProbe,
 } from '@jcsoftdev/intent-core';
 import {
@@ -731,5 +732,170 @@ describe('interpretation service', () => {
       });
     expect(create).toThrow(IntentDefinitionError);
     expect(create).toThrow('MISSING_REQUIREMENT');
+  });
+
+  describe('requirement path ownership', () => {
+    const lineProbe = (
+      paths: readonly string[],
+      fields: readonly MissingField[] = [],
+    ): RequirementProbe<Principal> => ({
+      capabilityId: 'orders.create',
+      paths,
+      probe: async () => fields,
+    });
+
+    const serviceWith = (
+      capabilities: readonly AnyDescriptor[],
+      probes: readonly RequirementProbe<Principal>[],
+      script: () => InterpreterResult = noInterpretation,
+    ) => {
+      const interpreter = createFakeInterpreter(script);
+      const service = createInterpretationService<Principal, Role>({
+        capabilities,
+        schema: createZodSchemaAdapter(),
+        rolesOf: (principal) => principal,
+        resolvers: [
+          createInMemoryEntityResolver<Principal>({ entity: 'dish', records: () => DISH_RECORDS }),
+          createInMemoryEntityResolver<Principal>({
+            entity: 'table',
+            records: () => [TERRACE_TABLE],
+            options: () => [TERRACE_TABLE],
+          }),
+        ],
+        probes,
+        interpreter,
+        ids: createSequentialIdSource('plan-'),
+      });
+      return { interpreter, service };
+    };
+
+    const strictOrders = define({
+      ...base,
+      id: 'orders.create',
+      description: 'Create an order',
+      patterns: ['pedido de {dish} para la mesa {table}'],
+      input: z.object({
+        tableId: z.string(),
+        lines: z.array(z.object({ offeringId: z.string(), modifiers: z.array(z.string()) })),
+        options: z.object({ sides: z.array(z.string()) }),
+      }),
+      entities: [
+        { path: 'lines[].offeringId', entity: 'dish' },
+        { path: 'tableId', entity: 'table' },
+      ],
+      roles: ['waiter'],
+    });
+
+    const strictDraft = {
+      tableId: '3',
+      lines: [{ offeringId: 'arroz con pollo', modifiers: ['opt-foreign'] }],
+      options: { sides: ['opt-foreign'] },
+    };
+
+    const rejected = {
+      ok: false,
+      failure: { stage: 'resolution', code: 'INVALID_INPUT', retryable: false },
+    };
+
+    test('N1: a schema-required requirement path never accepts a raw client answer', async () => {
+      const { service } = serviceWith(
+        [strictOrders],
+        [lineProbe(['lines[].modifiers', 'options.sides'])],
+      );
+      const first = await service.interpret(waiter, continuation(strictDraft, {}), { signal });
+      expect(first).toMatchObject({
+        ok: true,
+        value: { status: 'incomplete', missing: [{ path: 'lines[0].modifiers' }] },
+      });
+      const answers = [
+        { 'lines[0].modifiers': ['opt-foreign'] },
+        { options: ['opt-foreign'] },
+        { 'options.sides': ['opt-foreign'] },
+      ] as const;
+      for (const answer of answers) {
+        const outcome = await service.interpret(waiter, continuation(strictDraft, answer), {
+          signal,
+        });
+        expect(outcome).toEqual(rejected);
+      }
+    });
+
+    test('N2: the leaf spelling of a declared path hides the slot and strips the draft value', async () => {
+      const { interpreter, service } = serviceWith(
+        [ordersCreate],
+        [lineProbe(['lines[].modifiers[]'])],
+        () => ({
+          status: 'proposed',
+          proposals: [
+            {
+              capabilityId: 'orders.create',
+              slots: { dish: 'arroz con pollo', table: '3', modifiers: 'opt-foreign' },
+              confidence: 0.9,
+            },
+          ],
+        }),
+      );
+      const stripped = await service.interpret(
+        waiter,
+        continuation(
+          { tableId: '3', lines: [{ offeringId: 'arroz con pollo', modifiers: ['opt-foreign'] }] },
+          {},
+        ),
+        { signal },
+      );
+      expect(JSON.stringify(stripped)).not.toContain('opt-foreign');
+      expect(stripped).toMatchObject({ ok: true, value: { status: 'complete' } });
+      const proposed = await service.interpret(waiter, utterance('quiero algo rico'), { signal });
+      expect(JSON.stringify(proposed)).not.toContain('opt-foreign');
+      const manifest = interpreter.calls()[0]?.catalog.find(({ id }) => id === 'orders.create');
+      expect(JSON.stringify(manifest?.inputJsonSchema)).not.toContain('modifiers');
+    });
+
+    test('N3: a probe field outside its declared paths fails closed and is never applied', async () => {
+      const extras: MissingField = {
+        path: 'lines[0].extras',
+        reason: 'requirement',
+        prompt: 'Extras',
+        options: [{ id: 'opt-foreign', label: 'Extra' }],
+      };
+      const { service } = serviceWith([ordersCreate], [lineProbe(['lines[].modifiers'], [extras])]);
+      const outcome = await service.interpret(
+        waiter,
+        continuation(
+          { tableId: '3', lines: [{ offeringId: 'arroz con pollo' }] },
+          { 'lines[0].extras': ['opt-foreign'] },
+        ),
+        { signal },
+      );
+      expect(outcome).toEqual({
+        ok: false,
+        failure: { stage: 'resolution', code: 'RESOLUTION_UNAVAILABLE', retryable: false },
+      });
+    });
+
+    test('N4: a requirement path that equals, contains or is contained in an entity path is INVALID_PATH', () => {
+      for (const path of ['tableId', 'lines', 'lines[].offeringId']) {
+        expect(() => serviceWith([ordersCreate], [lineProbe([path])])).toThrow('INVALID_PATH');
+      }
+    });
+
+    test('N5: a declared requirement path may be id-shaped; an undeclared plural id array may not', () => {
+      const sideIds = define({
+        ...base,
+        id: 'orders.create',
+        description: 'Create an order',
+        input: z.object({ sideId: z.array(z.string()) }),
+        roles: ['waiter'],
+      });
+      expect(() => serviceWith([sideIds], [lineProbe(['sideId'])])).not.toThrow();
+      const modifierIds = define({
+        ...base,
+        id: 'orders.create',
+        description: 'Create an order',
+        input: z.object({ modifierIds: z.array(z.string()) }),
+        roles: ['waiter'],
+      });
+      expect(() => serviceWith([modifierIds], [])).toThrow('INVALID_SCHEMA');
+    });
   });
 });

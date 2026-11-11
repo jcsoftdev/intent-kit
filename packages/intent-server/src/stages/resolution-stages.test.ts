@@ -75,6 +75,7 @@ const catalog = createServerCatalog({
   capabilities: [ordersCreate, secret],
   schema,
   resolverEntities: ['table', 'dish'],
+  requirementPaths: new Map([['orders.create', ['lines[].modifiers']]]),
   normalize: createNormalizer(),
 });
 const view = catalog.viewFor('waiter');

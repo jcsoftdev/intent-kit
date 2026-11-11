@@ -1,4 +1,4 @@
-import { expandPattern, parsePath, setAtPath } from '@jcsoftdev/intent-core';
+import { expandPattern, matchesPattern, parsePath, setAtPath } from '@jcsoftdev/intent-core';
 import type {
   Interpretation,
   MissingField,
@@ -9,7 +9,9 @@ import type {
 import { INTERPRETATION_STAGES } from '../state.js';
 import type { InterpretationState } from '../state.js';
 import {
+  capabilityNotFound,
   invalidInputInResolution,
+  resolutionUnavailable,
   unavailableUnlessAborted,
   withoutAnswers,
 } from './entities-stage.js';
@@ -56,7 +58,7 @@ export const createRequirementsStage = <TPrincipal>(config: {
 }): Stage<InterpretationState<TPrincipal>, Interpretation> => ({
   name: INTERPRETATION_STAGES.requirements,
   phase: 'resolution',
-  requires: ['principal', 'draft', 'answers', 'resolvedInput'],
+  requires: ['catalog', 'principal', 'draft', 'answers', 'resolvedInput'],
   provides: ['resolvedInput', 'answers'],
   budget: {
     timeoutMs: config.budgetMs,
@@ -68,8 +70,12 @@ export const createRequirementsStage = <TPrincipal>(config: {
     if (!probe) {
       return next();
     }
+    const entry = context.get('catalog').get(draft.capabilityId);
+    if (!entry) {
+      return capabilityNotFound;
+    }
     const answers = context.get('answers');
-    const unfilled = withoutRequirementValues(context.get('resolvedInput'), probe.paths);
+    const unfilled = withoutRequirementValues(context.get('resolvedInput'), entry.requirementPaths);
     let fields: readonly MissingField[];
     try {
       fields = await probe.probe(
@@ -79,6 +85,12 @@ export const createRequirementsStage = <TPrincipal>(config: {
       );
     } catch (error) {
       return unavailableUnlessAborted(context.signal, error);
+    }
+    const undeclared = fields.some(
+      ({ path }) => !entry.requirementPaths.some((declared) => matchesPattern(path, declared)),
+    );
+    if (undeclared) {
+      return resolutionUnavailable(false);
     }
     let input = unfilled;
     const unanswered: MissingField[] = [];

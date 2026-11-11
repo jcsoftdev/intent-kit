@@ -31,7 +31,11 @@ export const createValidateStage = <TPrincipal>(config: {
     const answeredPaths = Object.keys(answers);
     if (
       !answersAreWellFormed(answers) ||
-      answeredPaths.some((path) => descriptor.entities.some((param) => overlaps(path, param.path)))
+      answeredPaths.some((path) =>
+        [...descriptor.entities.map((param) => param.path), ...entry.requirementPaths].some(
+          (guarded) => overlaps(path, guarded),
+        ),
+      )
     ) {
       return invalidInputInResolution;
     }

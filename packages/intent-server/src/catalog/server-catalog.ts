@@ -2,6 +2,7 @@ import {
   IntentDefinitionError,
   foldText,
   jsonSchemaLeaves,
+  overlaps,
   parsePath,
   relaxEntityPaths,
   validateDescriptor,
@@ -22,6 +23,7 @@ export interface CatalogEntry {
   readonly descriptor: AnyDescriptor;
   readonly manifest: CapabilityManifestEntry;
   readonly slots: SlotIndex;
+  readonly requirementPaths: readonly string[];
   readonly patterns: readonly CompiledPattern[];
 }
 
@@ -47,7 +49,8 @@ const SLOT_CAPS = 'patterns allow at most 4 slots, at most 2 text slots and no s
 const SLOT_TOKEN = /\{[^{}]*\}/g;
 const SLOT_IN_ALTERNATION = /\([^()]*\{/;
 const LITERAL_SPLIT = /[\s()|[\]?]+/;
-const ID_SUFFIX = /Id$/;
+const ID_SUFFIX = /Ids?$/;
+const TRAILING_WILDCARDS = /(\[\])+$/;
 const NON_LITERAL = /\{[^{}]*\}|[\s()|[\]?]/g;
 const WILDCARD = '[]';
 
@@ -100,13 +103,18 @@ const idShapedPaths = (schema: JsonObject): ReadonlySet<string> =>
       .filter((path) => ID_SUFFIX.test(leafNameOf(path))),
   ]);
 
-const assertIdLeavesAreEntities = (descriptor: AnyDescriptor, schema: JsonObject): void => {
+const assertIdLeavesAreEntities = (
+  descriptor: AnyDescriptor,
+  schema: JsonObject,
+  requirementPaths: readonly string[],
+): void => {
   if (descriptor.agent === 'never') {
     return;
   }
   const entityPaths = new Set(descriptor.entities.map(({ path }) => path));
   for (const path of idShapedPaths(schema)) {
-    if (!entityPaths.has(path)) {
+    const guarded = requirementPaths.some((declared) => overlaps(path, declared));
+    if (!entityPaths.has(path) && !guarded) {
       throw new IntentDefinitionError(
         'INVALID_SCHEMA',
         `${descriptor.id}:${path} is id-shaped and must be declared as an entity path`,
@@ -205,6 +213,10 @@ const compilePatterns = (
   );
 };
 
+const canonicalRequirementPaths = (paths: readonly string[]): readonly string[] => [
+  ...new Set(paths.map((path) => path.replace(TRAILING_WILDCARDS, ''))),
+];
+
 const assertRequirementPaths = (
   descriptor: AnyDescriptor,
   schema: JsonObject,
@@ -215,7 +227,8 @@ const assertRequirementPaths = (
     const exists = leafPaths.some(
       (leaf) => leaf === path || leaf.startsWith(`${path}[]`) || leaf.startsWith(`${path}.`),
     );
-    if (!exists) {
+    const collides = descriptor.entities.some((param) => overlaps(path, param.path));
+    if (!exists || collides) {
       throw new IntentDefinitionError('INVALID_PATH', `${descriptor.id}:${path}`);
     }
   }
@@ -257,10 +270,12 @@ const omitPaths = (schema: JsonObject, paths: readonly string[]): JsonObject =>
 const buildEntry = (config: ServerCatalogConfig, descriptor: AnyDescriptor): CatalogEntry => {
   validateDescriptor(descriptor);
   const rawSchema = config.schema.toJsonSchema(descriptor.input);
-  assertIdLeavesAreEntities(descriptor, rawSchema);
-  assertResolvers(descriptor, new Set(config.resolverEntities));
-  const requirementPaths = config.requirementPaths?.get(descriptor.id) ?? [];
+  const requirementPaths = canonicalRequirementPaths(
+    config.requirementPaths?.get(descriptor.id) ?? [],
+  );
   assertRequirementPaths(descriptor, rawSchema, requirementPaths);
+  assertIdLeavesAreEntities(descriptor, rawSchema, requirementPaths);
+  assertResolvers(descriptor, new Set(config.resolverEntities));
   const inputJsonSchema = omitPaths(
     relaxEntityPaths(
       rawSchema,
@@ -279,6 +294,7 @@ const buildEntry = (config: ServerCatalogConfig, descriptor: AnyDescriptor): Cat
       inputJsonSchema,
     },
     slots,
+    requirementPaths,
     patterns: compilePatterns(descriptor, inputJsonSchema, slots, config.normalize),
   };
 };
