@@ -3,3 +3,8 @@ export * from './catalog-stage.js';
 export * from './deterministic-stage.js';
 export * from './interpret-stage.js';
 export * from './draft-stage.js';
+export { createEntitiesStage } from './entities-stage.js';
+export { createRequirementsStage } from './requirements-stage.js';
+export { createValidateStage } from './validate-stage.js';
+export { createAuthorizeStage } from './authorize-stage.js';
+export { createPlanTerminal } from './plan-terminal.js';
