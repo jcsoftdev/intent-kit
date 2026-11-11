@@ -19,15 +19,14 @@ const handedOffResult: ActionResult = {
   presentation: { status: 'skipped' },
 };
 const undoneResult: ActionResult = { status: 'undone', planId: 'p1', capabilityId: 'cap' };
-const incomplete = {
+type Received = Extract<SessionEvent, { type: 'interpretation.received' }>['interpretation'];
+type Clarification = Extract<SessionState, { name: 'clarifying' }>['interpretation'];
+const incomplete: Clarification = {
   status: 'incomplete',
-  draft: { capabilityId: 'cap', version: 1, slots: {} },
+  draft: { capabilityId: 'cap', version: 1, input: {} },
   missing: [],
-} as unknown as Extract<SessionEvent, { type: 'interpretation.received' }>['interpretation'];
-const ambiguous = {
-  status: 'ambiguous',
-  candidates: [],
-} as unknown as Extract<SessionEvent, { type: 'interpretation.received' }>['interpretation'];
+};
+const ambiguous: Clarification = { status: 'ambiguous', candidates: [] };
 const unsupportedInterpretation = { status: 'unsupported', suggestions: ['a', 'b'] } as const;
 
 const idle: SessionState = { name: 'idle' };
@@ -35,7 +34,7 @@ const capturing: SessionState = { name: 'capturing', mode: 'typing' };
 const interpreting: SessionState = { name: 'interpreting' };
 const clarifying: SessionState = {
   name: 'clarifying',
-  interpretation: incomplete as Extract<SessionState, { name: 'clarifying' }>['interpretation'],
+  interpretation: incomplete,
 };
 const unsupported: SessionState = { name: 'unsupported', suggestions: [] };
 const awaiting: SessionState = { name: 'awaitingConfirmation', planId: 'p1' };
@@ -85,9 +84,10 @@ const allStates: readonly SessionState[] = [
 
 const typed = (mode: 'typing' | 'listening'): SessionEvent => ({ type: 'capture.started', mode });
 const submitted: SessionEvent = { type: 'capture.submitted' };
-const received = (
-  interpretation: Extract<SessionEvent, { type: 'interpretation.received' }>['interpretation'],
-): SessionEvent => ({ type: 'interpretation.received', interpretation });
+const received = (interpretation: Received): SessionEvent => ({
+  type: 'interpretation.received',
+  interpretation,
+});
 const answer: SessionEvent = { type: 'answer.submitted' };
 const confirmation: SessionEvent = { type: 'confirmation.requested', planId: 'p1' };
 const started: SessionEvent = { type: 'execution.started', planId: 'p1' };
@@ -122,6 +122,12 @@ const allEvents: readonly SessionEvent[] = [
 
 const interpretingNames = (state: SessionState): string => state.name;
 
+function variant(state: SessionState): string {
+  if (state.name !== 'executing') return state.name;
+  if (!state.sent) return 'executing(unsent)';
+  return state.cancellableAfterSend ? 'executing(sent,cancellable)' : 'executing(sent,fixed)';
+}
+
 describe('transition table', () => {
   test.each<[SessionState, SessionEvent, SessionState]>([
     ...[idle, ...terminals].map((from): [SessionState, SessionEvent, SessionState] => [
@@ -134,16 +140,8 @@ describe('transition table', () => {
       submitted,
       interpreting,
     ]),
-    [
-      interpreting,
-      received(incomplete),
-      { name: 'clarifying', interpretation: incomplete } as SessionState,
-    ],
-    [
-      interpreting,
-      received(ambiguous),
-      { name: 'clarifying', interpretation: ambiguous } as SessionState,
-    ],
+    [interpreting, received(incomplete), { name: 'clarifying', interpretation: incomplete }],
+    [interpreting, received(ambiguous), { name: 'clarifying', interpretation: ambiguous }],
     [
       interpreting,
       received(unsupportedInterpretation),
@@ -197,6 +195,16 @@ describe('no-ops', () => {
     expect(transition(executingSentFixed, cancel)).toBe(executingSentFixed);
   });
 
+  test('cancel in executing(sent: true) does not produce cancelled', () => {
+    expect(transition(executingSentFixed, cancel).name).toBe('executing');
+    expect(transition(executingSentFixed, cancel)).not.toEqual(cancelled);
+  });
+
+  test('a duplicate execution.sent in executing(sent: true) returns the same object', () => {
+    expect(transition(executingSentFixed, sent(true))).toBe(executingSentFixed);
+    expect(transition(executingSentCancellable, sent(true))).toBe(executingSentCancellable);
+  });
+
   test('cancel in presenting is a no-op for the reducer', () => {
     expect(transition(presenting, cancel)).toBe(presenting);
   });
@@ -210,12 +218,14 @@ describe('no-ops', () => {
     for (const state of allStates) {
       for (const event of allEvents) {
         const next = transition(state, event);
-        if (next !== state) changed.push(`${state.name}+${event.type}`);
+        if (next !== state) changed.push(`${variant(state)}+${event.type}`);
       }
     }
     expect([...new Set(changed)].sort()).toEqual([...new Set(EXPECTED_CHANGES)].sort());
   });
 });
+
+const EXECUTING = ['executing(unsent)', 'executing(sent,cancellable)', 'executing(sent,fixed)'];
 
 const EXPECTED_CHANGES: readonly string[] = [
   ...['idle', 'completed', 'undone', 'cancelled', 'failed', 'unsupported'].map(
@@ -230,16 +240,20 @@ const EXPECTED_CHANGES: readonly string[] = [
   ...['interpreting', 'clarifying', 'awaitingConfirmation'].map(
     (name) => `${name}+execution.started`,
   ),
-  'executing+execution.sent',
-  'executing+presentation.started',
-  'executing+action.settled',
-  'presenting+action.settled',
+  'executing(unsent)+execution.sent',
+  ...EXECUTING.map((name) => `${name}+presentation.started`),
+  ...[...EXECUTING, 'presenting'].map((name) => `${name}+action.settled`),
   'completed+undo.started',
   'undoing+undo.finished',
-  ...['capturing', 'interpreting', 'clarifying', 'awaitingConfirmation', 'executing'].map(
-    (name) => `${name}+cancel`,
-  ),
-  ...allStates.filter((state) => !isTerminal(state)).map((state) => `${state.name}+failure`),
+  ...[
+    'capturing',
+    'interpreting',
+    'clarifying',
+    'awaitingConfirmation',
+    'executing(unsent)',
+    'executing(sent,cancellable)',
+  ].map((name) => `${name}+cancel`),
+  ...allStates.filter((state) => !isTerminal(state)).map((state) => `${variant(state)}+failure`),
   ...terminals.map((state) => `${state.name}+reset`),
 ];
 
