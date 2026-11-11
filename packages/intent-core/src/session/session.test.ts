@@ -1,0 +1,551 @@
+import { expect, test } from 'vitest';
+import type {
+  ActionLifecycle,
+  ActionResult,
+  AnyDescriptor,
+  Draft,
+  EffectContext,
+  EffectResult,
+  Failure,
+  FailureMessages,
+  Interpretation,
+  InterpretationInput,
+  Outcome,
+  SessionState,
+  StandardSchemaV1,
+} from '../contracts/index.js';
+import { createRoleAuthorizer } from '../policy/index.js';
+import { createManualClock } from '../primitives/index.js';
+import { createCapabilityRegistry } from '../registry/index.js';
+import { createIntentKit } from './kit.js';
+import { createIntentSession } from './session.js';
+
+interface Principal {
+  readonly active: string;
+  readonly granted: readonly string[];
+}
+
+const passthrough: StandardSchemaV1 = {
+  '~standard': { version: 1, vendor: 'test', validate: (value) => ({ value }) },
+};
+
+const ordersCreate: AnyDescriptor = {
+  id: 'orders.create',
+  version: 1,
+  kind: 'write',
+  agent: 'allowed',
+  description: 'Create an order',
+  aliases: [],
+  examples: [],
+  patterns: [],
+  scope: 'global',
+  input: passthrough,
+  entities: [],
+  risk: 'write',
+  confirmation: 'never',
+  reversibility: { kind: 'compensate', via: 'orders.cancel', windowMs: 5000 },
+  idempotency: { kind: 'none' },
+  roles: ['waiter', 'host'],
+  destination: {
+    default: { routeId: 'myOrders', target: { intent: 'my-order', key: '{output.orderId}' } },
+  },
+};
+
+const draftOf = (capabilityId = 'orders.create'): Draft => ({
+  capabilityId,
+  version: 1,
+  input: { tableId: 't-3' },
+});
+
+const complete = (planId: string): Interpretation => ({
+  status: 'complete',
+  planId,
+  draft: draftOf(),
+  summary: 'Order',
+  source: 'deterministic',
+});
+
+const incomplete: Interpretation = {
+  status: 'incomplete',
+  draft: draftOf(),
+  missing: [
+    {
+      path: 'side',
+      reason: 'required',
+      prompt: 'Con que?',
+      options: [
+        { id: 'opt-yuca', label: 'Yuca' },
+        { id: 'opt-arroz', label: 'Arroz' },
+      ],
+    },
+  ],
+};
+
+const ambiguousCapabilities: Interpretation = {
+  status: 'ambiguous',
+  candidates: [
+    { kind: 'capability', capabilityId: 'orders.create', label: 'Crear' },
+    { kind: 'capability', capabilityId: 'orders.cancel', label: 'Cancelar' },
+  ],
+};
+
+const unsupported: Interpretation = { status: 'unsupported', suggestions: [] };
+
+const ok = (value: Interpretation): Outcome<Interpretation> => ({ ok: true, value });
+
+type Responder = (
+  input: InterpretationInput,
+  options: { signal: AbortSignal },
+) => Promise<Outcome<Interpretation>>;
+
+interface Deferred<T> {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T) => void;
+}
+
+const deferred = <T>(): Deferred<T> => {
+  let resolve: (value: T) => void = () => undefined;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+};
+
+const flush = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
+
+const failureMessages: FailureMessages = {
+  CAPABILITY_NOT_FOUND: 'msg:CAPABILITY_NOT_FOUND',
+  INTERPRETER_UNAVAILABLE: 'msg:INTERPRETER_UNAVAILABLE',
+  INTERPRETER_TIMEOUT: 'msg:INTERPRETER_TIMEOUT',
+  ENTITY_NOT_FOUND: 'msg:ENTITY_NOT_FOUND',
+  RESOLUTION_UNAVAILABLE: 'msg:RESOLUTION_UNAVAILABLE',
+  INVALID_INPUT: 'msg:INVALID_INPUT',
+  UNAUTHORIZED: 'msg:UNAUTHORIZED',
+  NOT_AVAILABLE: 'msg:NOT_AVAILABLE',
+  AGENT_FORBIDDEN: 'msg:AGENT_FORBIDDEN',
+  RATE_LIMITED: 'msg:RATE_LIMITED',
+  CONFIRMATION_DECLINED: 'msg:CONFIRMATION_DECLINED',
+  NAVIGATION_FAILED: 'msg:NAVIGATION_FAILED',
+  ROUTE_NOT_READY: 'msg:ROUTE_NOT_READY',
+  EXECUTION_FAILED: 'msg:EXECUTION_FAILED',
+  CONFLICT: 'msg:CONFLICT',
+  STALE_PLAN: 'msg:STALE_PLAN',
+  TARGET_NOT_FOUND: 'msg:TARGET_NOT_FOUND',
+  SEMANTICS_VIOLATION: 'msg:SEMANTICS_VIOLATION',
+  ABORTED: 'msg:ABORTED',
+};
+
+interface Options {
+  readonly descriptor?: AnyDescriptor;
+  readonly responders?: readonly Responder[];
+  readonly effect?: (input: unknown, context: EffectContext) => Promise<EffectResult<unknown>>;
+  readonly confirm?: () => Promise<'confirmed' | 'declined'>;
+  readonly reveal?: (signal: AbortSignal) => Promise<void>;
+}
+
+const harness = (options: Options = {}) => {
+  const clock = createManualClock();
+  const registry = createCapabilityRegistry();
+  const calls: EffectContext[] = [];
+  const interpretations: InterpretationInput[] = [];
+  const signals: AbortSignal[] = [];
+  const announcements: { message: string; politeness: string }[] = [];
+  const descriptor = options.descriptor ?? ordersCreate;
+  const effect =
+    options.effect ??
+    (async (): Promise<EffectResult<unknown>> => ({ ok: true, output: { orderId: 'o-1' } }));
+  registry.register(descriptor, async () => ({
+    default: {
+      run: (input, context) => {
+        calls.push(context);
+        return effect(input, context);
+      },
+    },
+  }));
+  const responders = [...(options.responders ?? [])];
+  const reveals: AbortSignal[] = [];
+  let role = 'waiter';
+  const kit = createIntentKit<Principal, string, string, string>({
+    registry,
+    authorizer: createRoleAuthorizer((principal: Principal) => principal),
+    confirmation: { confirm: options.confirm ?? (async () => 'confirmed') },
+    router: {
+      currentRoute: () => undefined,
+      navigate: async () => undefined,
+      waitUntilReady: async () => undefined,
+    },
+    targets: {
+      register: () => () => undefined,
+      find: () => undefined,
+      waitFor: async (ref) => ref.intent,
+    },
+    revealer: {
+      async reveal(_element, _mode, { signal }) {
+        reveals.push(signal);
+        await options.reveal?.(signal);
+      },
+    },
+    announcer: { announce: (message, politeness) => announcements.push({ message, politeness }) },
+    messages: {
+      [descriptor.id]: { success: () => 'Pedido enviado', confirm: () => 'Confirmar' },
+    },
+    compensator: { compensate: async () => ({ ok: true, output: null }) },
+    clock,
+    interpretation: {
+      interpret(input, { signal }) {
+        interpretations.push(input);
+        signals.push(signal);
+        const responder = responders.shift();
+        return responder
+          ? responder(input, { signal })
+          : Promise.resolve({ ok: true, value: unsupported });
+      },
+    },
+    principal: () => ({ active: role, granted: ['waiter', 'host'] }),
+    activeRole: () => role,
+    locale: 'es-PE',
+    failureMessages,
+  });
+  const session = kit.createSession();
+  const states: SessionState[] = [];
+  session.subscribe((state) => states.push(state));
+  const names = (): string[] =>
+    states.map((state) => state.name).filter((name, index, all) => name !== all[index - 1]);
+  return {
+    kit,
+    session,
+    clock,
+    calls,
+    interpretations,
+    signals,
+    announcements,
+    reveals,
+    states,
+    names,
+    setRole: (next: string) => {
+      role = next;
+    },
+  };
+};
+
+const answering =
+  (value: Interpretation): Responder =>
+  async () =>
+    ok(value);
+
+const graceDescriptor: AnyDescriptor = {
+  ...ordersCreate,
+  reversibility: { kind: 'grace', delayMs: 5000 },
+};
+
+const completedResult = (state: SessionState): ActionResult | undefined =>
+  state.name === 'completed' ? state.result : undefined;
+
+test('complete interpretation goes interpreting, executing, presenting, completed with no clarifying in between', async () => {
+  const h = harness({ responders: [answering(complete('p-1'))] });
+  const state = await h.session.submit({ text: 'pedido mesa 3', source: 'text' });
+  expect(h.names()).toEqual(['interpreting', 'executing', 'presenting', 'completed']);
+  expect(completedResult(state)?.status).toBe('completed');
+  expect(h.calls).toHaveLength(1);
+});
+
+test('incomplete clarifies; answerByText sends a continuation with the Yuca option id and the received draft', async () => {
+  const h = harness({ responders: [answering(incomplete), answering(complete('p-1'))] });
+  const clarifying = await h.session.submit({ text: 'pedido', source: 'voice' });
+  expect(clarifying.name).toBe('clarifying');
+  const state = await h.session.answerByText('con yuca');
+  expect(h.interpretations[1]).toEqual({
+    kind: 'continuation',
+    locale: 'es-PE',
+    source: 'voice',
+    continuation: { draft: draftOf(), answers: { side: 'opt-yuca' } },
+    origin: 'interpreter',
+  });
+  expect(completedResult(state)?.status).toBe('completed');
+});
+
+test('answerByText with no matching option stays clarifying and makes no interpretation call', async () => {
+  const h = harness({ responders: [answering(incomplete)] });
+  await h.session.submit({ text: 'pedido', source: 'text' });
+  const state = await h.session.answerByText('con camote');
+  expect(state.name).toBe('clarifying');
+  expect(h.interpretations).toHaveLength(1);
+});
+
+test('answers accumulate across clarification rounds', async () => {
+  const second: Interpretation = {
+    ...incomplete,
+    missing: [{ path: 'size', reason: 'required', prompt: 'Tamano?' }],
+  };
+  const h = harness({
+    responders: [answering(incomplete), answering(second), answering(complete('p-1'))],
+  });
+  await h.session.submit({ text: 'pedido', source: 'text' });
+  await h.session.answerByText('yuca');
+  await h.session.answer({ size: 'grande' });
+  expect(h.interpretations[2]).toMatchObject({
+    continuation: { answers: { side: 'opt-yuca', size: 'grande' } },
+  });
+});
+
+test('ambiguous capabilities: chooseCapability re-sends the text with restrictTo', async () => {
+  const h = harness({ responders: [answering(ambiguousCapabilities), answering(complete('p-1'))] });
+  await h.session.submit({ text: 'crear pedido', source: 'text' });
+  await h.session.chooseCapability('orders.create');
+  expect(h.interpretations[1]).toMatchObject({
+    kind: 'utterance',
+    text: 'crear pedido',
+    restrictTo: 'orders.create',
+  });
+});
+
+test('cancel while interpreting aborts the interpretation signal and ends cancelled', async () => {
+  const pending = deferred<Outcome<Interpretation>>();
+  const h = harness({ responders: [() => pending.promise] });
+  const submitted = h.session.submit({ text: 'pedido', source: 'text' });
+  await flush();
+  h.session.cancel();
+  expect(h.signals[0]?.aborted).toBe(true);
+  expect(h.session.state().name).toBe('cancelled');
+  pending.resolve(ok(complete('p-1')));
+  await submitted;
+  expect(h.session.state().name).toBe('cancelled');
+  expect(h.calls).toEqual([]);
+});
+
+test('cancel after execution.sent for a write is ignored and the result still completes', async () => {
+  const release = deferred<EffectResult<unknown>>();
+  const h = harness({
+    responders: [answering(complete('p-1'))],
+    effect: () => release.promise,
+  });
+  const submitted = h.session.submit({ text: 'pedido', source: 'text' });
+  await flush();
+  expect(h.session.state()).toMatchObject({ name: 'executing', sent: true });
+  h.session.cancel();
+  expect(h.session.state().name).toBe('executing');
+  release.resolve({ ok: true, output: { orderId: 'o-1' } });
+  const state = await submitted;
+  expect(completedResult(state)?.status).toBe('completed');
+  expect(h.names()).not.toContain('cancelled');
+});
+
+test('cancel during the grace wait ends cancelled and the effect never runs', async () => {
+  const h = harness({ descriptor: graceDescriptor, responders: [answering(complete('p-1'))] });
+  const submitted = h.session.submit({ text: 'pedido', source: 'text' });
+  await flush();
+  expect(h.session.state()).toMatchObject({ name: 'executing', sent: false });
+  h.session.cancel();
+  await submitted;
+  await h.clock.advance(10_000);
+  expect(h.session.state().name).toBe('cancelled');
+  expect(h.calls).toEqual([]);
+});
+
+test('a second submit while executing-sent waits and starts only after the first completes', async () => {
+  const release = deferred<EffectResult<unknown>>();
+  const h = harness({
+    responders: [answering(complete('p-1')), answering(unsupported)],
+    effect: () => release.promise,
+  });
+  const first = h.session.submit({ text: 'uno', source: 'text' });
+  await flush();
+  const second = h.session.submit({ text: 'dos', source: 'text' });
+  await flush();
+  expect(h.interpretations).toHaveLength(1);
+  release.resolve({ ok: true, output: { orderId: 'o-1' } });
+  expect(completedResult(await first)?.status).toBe('completed');
+  expect((await second).name).toBe('unsupported');
+  expect(h.interpretations.map((input) => (input.kind === 'utterance' ? input.text : ''))).toEqual([
+    'uno',
+    'dos',
+  ]);
+  expect(h.names()).toEqual([
+    'interpreting',
+    'executing',
+    'presenting',
+    'completed',
+    'interpreting',
+    'unsupported',
+  ]);
+});
+
+test('a second submit while interpreting aborts the first and ignores its late response', async () => {
+  const late = deferred<Outcome<Interpretation>>();
+  const h = harness({ responders: [() => late.promise, answering(unsupported)] });
+  const first = h.session.submit({ text: 'uno', source: 'text' });
+  await flush();
+  const second = h.session.submit({ text: 'dos', source: 'text' });
+  await flush();
+  expect(h.signals[0]?.aborted).toBe(true);
+  late.resolve(ok(complete('p-1')));
+  await first;
+  await second;
+  expect(h.names()).toEqual(['interpreting', 'cancelled', 'interpreting', 'unsupported']);
+  expect(h.session.state().name).toBe('unsupported');
+  expect(h.calls).toEqual([]);
+});
+
+test('a failed interpretation is announced assertively with failureMessages[code]', async () => {
+  const failure: Failure = {
+    stage: 'interpretation',
+    code: 'INTERPRETER_TIMEOUT',
+    retryable: true,
+  };
+  const h = harness({ responders: [async () => ({ ok: false, failure })] });
+  const state = await h.session.submit({ text: 'pedido', source: 'text' });
+  expect(state).toEqual({ name: 'failed', failure });
+  expect(h.announcements).toEqual([
+    { message: 'msg:INTERPRETER_TIMEOUT', politeness: 'assertive' },
+  ]);
+});
+
+test('undo inside the window goes undoing then undone', async () => {
+  const h = harness({ responders: [answering(complete('p-1'))] });
+  await h.session.submit({ text: 'pedido', source: 'text' });
+  const state = await h.session.undo('p-1');
+  expect(state).toEqual({ name: 'undone', planId: 'p-1' });
+  expect(h.names().slice(-3)).toEqual(['completed', 'undoing', 'undone']);
+});
+
+test('undo after the window fails with STALE_PLAN', async () => {
+  const h = harness({ responders: [answering(complete('p-1'))] });
+  await h.session.submit({ text: 'pedido', source: 'text' });
+  await h.clock.advance(6000);
+  const state = await h.session.undo('p-1');
+  expect(state).toEqual({
+    name: 'failed',
+    failure: { stage: 'execution', code: 'STALE_PLAN', retryable: false },
+  });
+  expect(h.announcements.at(-1)).toEqual({ message: 'msg:STALE_PLAN', politeness: 'assertive' });
+});
+
+test('cancel while presenting completes with presentation degraded ABORTED and still announces success', async () => {
+  const h = harness({
+    responders: [answering(complete('p-1'))],
+    reveal: (signal) =>
+      new Promise((_resolve, reject) => {
+        signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+      }),
+  });
+  const submitted = h.session.submit({ text: 'pedido', source: 'text' });
+  await flush();
+  expect(h.session.state().name).toBe('presenting');
+  h.session.cancel();
+  const state = await submitted;
+  expect(completedResult(state)).toMatchObject({
+    status: 'completed',
+    presentation: { status: 'degraded', code: 'ABORTED' },
+  });
+  expect(h.announcements).toEqual([{ message: 'Pedido enviado', politeness: 'polite' }]);
+});
+
+test('a new submit while presenting cuts only the reveal: the write completes, is not ABORTED and keeps its undo offer', async () => {
+  const h = harness({
+    responders: [answering(complete('p-1')), answering(unsupported)],
+    reveal: (signal) =>
+      new Promise((_resolve, reject) => {
+        signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+      }),
+  });
+  const first = h.session.submit({ text: 'uno', source: 'text' });
+  await flush();
+  expect(h.session.state().name).toBe('presenting');
+  const second = h.session.submit({ text: 'dos', source: 'text' });
+  expect(completedResult(await first)).toMatchObject({
+    status: 'completed',
+    presentation: { status: 'degraded', code: 'ABORTED' },
+  });
+  expect((await second).name).toBe('unsupported');
+  expect(h.names()).not.toContain('cancelled');
+  expect(h.names()).not.toContain('failed');
+  expect(h.kit.undo.active().map((entry) => entry.planId)).toEqual(['p-1']);
+  expect(h.signals[0]?.aborted).toBe(false);
+});
+
+test('a grace undo settles undone while the session is executing and the effect never runs', async () => {
+  const h = harness({ descriptor: graceDescriptor, responders: [answering(complete('p-1'))] });
+  const submitted = h.session.submit({ text: 'pedido', source: 'text' });
+  await flush();
+  expect(h.session.state()).toMatchObject({ name: 'executing', sent: false });
+  const state = await h.session.undo('p-1');
+  expect(state).toEqual({ name: 'undone', planId: 'p-1' });
+  await submitted;
+  await h.clock.advance(10_000);
+  expect(h.calls).toEqual([]);
+});
+
+test('a role change during confirmation cancels the command and the effect never runs', async () => {
+  const answer = deferred<'confirmed' | 'declined'>();
+  const h = harness({
+    descriptor: { ...ordersCreate, confirmation: 'always' },
+    responders: [answering(complete('p-1'))],
+    confirm: () => answer.promise,
+  });
+  const submitted = h.session.submit({ text: 'pedido', source: 'text' });
+  await flush();
+  expect(h.session.state().name).toBe('awaitingConfirmation');
+  h.setRole('host');
+  answer.resolve('confirmed');
+  expect((await submitted).name).toBe('cancelled');
+  expect(h.calls).toEqual([]);
+});
+
+test('events from a superseded command never change the current state', async () => {
+  const lifecycles: ActionLifecycle[] = [];
+  const pending = deferred<Outcome<ActionResult>>();
+  const late = deferred<Outcome<Interpretation>>();
+  let calls = 0;
+  const session = createIntentSession<Principal, string>({
+    interpretation: {
+      interpret: () => {
+        calls += 1;
+        return calls === 1 ? Promise.resolve(ok(complete('p-1'))) : late.promise;
+      },
+    },
+    pipeline: {
+      stages: [],
+      run: (seed) => {
+        if (seed.lifecycle) {
+          lifecycles.push(seed.lifecycle);
+        }
+        return pending.promise;
+      },
+    },
+    undo: {
+      offer: () => () => undefined,
+      active: () => [],
+      undo: async () => ({ ok: true, output: null }),
+    },
+    announcer: { announce: () => undefined },
+    events: { emit: () => undefined, subscribe: () => () => undefined },
+    principal: () => ({ active: 'waiter', granted: ['waiter'] }),
+    activeRole: () => 'waiter',
+    locale: 'es-PE',
+    failureMessages,
+  });
+  const first = session.submit({ text: 'uno', source: 'text' });
+  await flush();
+  const lifecycle = lifecycles[0];
+  const second = session.submit({ text: 'dos', source: 'text' });
+  await flush();
+  expect(session.state().name).toBe('interpreting');
+  lifecycle?.confirming('p-1');
+  lifecycle?.executing('p-1');
+  lifecycle?.sending('p-1', false);
+  lifecycle?.presenting('p-1');
+  expect(session.state().name).toBe('interpreting');
+  pending.resolve({
+    ok: true,
+    value: {
+      status: 'completed',
+      planId: 'p-1',
+      capabilityId: 'orders.create',
+      output: null,
+      presentation: { status: 'shown' },
+    },
+  });
+  await first;
+  late.resolve(ok(unsupported));
+  expect((await second).name).toBe('unsupported');
+});
