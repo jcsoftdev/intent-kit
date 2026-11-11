@@ -111,6 +111,17 @@ const announceSuccess = <TElement>(
   }
 };
 
+const raceBudget = (work: Promise<Presentation>, budget: AbortSignal): Promise<Presentation> =>
+  new Promise((resolve, reject) => {
+    const expire = (): void => resolve(degraded('ABORTED'));
+    if (budget.aborted) {
+      expire();
+      return;
+    }
+    budget.addEventListener('abort', expire, { once: true });
+    work.then(resolve, reject).finally(() => budget.removeEventListener('abort', expire));
+  });
+
 const present = async <TPrincipal, TRole extends string, TElement>(
   dependencies: PresentDependencies<TElement>,
   context: Parameters<ActionStage<TPrincipal, TRole>['run']>[0],
@@ -121,7 +132,10 @@ const present = async <TPrincipal, TRole extends string, TElement>(
   try {
     const reveal = context.get('lifecycle').presenting(context.get('plan').planId);
     const resolved = resolveDestination<string, string>(descriptor, context.get('role'), scope);
-    presentation = await presentationOf(dependencies, resolved, reveal);
+    presentation = await raceBudget(
+      presentationOf(dependencies, resolved, reveal),
+      dependencies.clock.timeout(dependencies.presentMs + dependencies.targetMs),
+    );
   } catch {
     presentation = degraded('ABORTED');
   }

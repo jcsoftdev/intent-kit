@@ -55,12 +55,14 @@ export type ActionStage<TPrincipal, TRole extends string> = Stage<
 
 export interface ActionBudgets {
   readonly executeMs: number;
+  readonly undoMs: number;
   readonly presentMs: number;
   readonly targetMs: number;
 }
 
 export const DEFAULT_ACTION_BUDGETS: ActionBudgets = {
   executeMs: 10_000,
+  undoMs: 10_000,
   presentMs: 3_000,
   targetMs: 3_000,
 };

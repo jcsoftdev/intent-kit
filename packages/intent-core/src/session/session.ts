@@ -3,6 +3,9 @@ import type {
   ActionResult,
   Announcer,
   Answers,
+  Clock,
+  EffectResult,
+  FailureCode,
   EventBus,
   ExecutablePlan,
   Failure,
@@ -49,6 +52,8 @@ export interface SessionDependencies<TPrincipal, TRole extends string> {
   readonly undo: UndoRegistry;
   readonly announcer: Announcer;
   readonly events: EventBus<IntentEvent>;
+  readonly clock: Clock;
+  readonly undoMs: number;
   readonly principal: () => TPrincipal;
   readonly activeRole: () => TRole;
   readonly locale: string;
@@ -75,6 +80,8 @@ const interpreterUnavailable: Failure = {
 
 const executionFailed: Failure = { stage: 'execution', code: 'EXECUTION_FAILED', retryable: false };
 
+const abortedFailure: Failure = { stage: 'execution', code: 'ABORTED', retryable: true };
+
 const idle: SessionState = { name: 'idle' };
 
 const doNothing = (): void => undefined;
@@ -92,6 +99,8 @@ export function createIntentSession<TPrincipal, TRole extends string>(
   let active: Run<TRole> | undefined;
   let running: Promise<void> | undefined;
   let queueTicket = 0;
+  let droppedUpTo = 0;
+  let undoAbort: AbortController | undefined;
 
   const send = (run: Run<TRole>, event: SessionEvent): void => {
     if (run !== active) {
@@ -124,6 +133,10 @@ export function createIntentSession<TPrincipal, TRole extends string>(
     return tracked;
   };
 
+  const notice = (code: FailureCode): void => {
+    dependencies.announcer.announce(dependencies.failureMessages[code], 'polite');
+  };
+
   const fail = (run: Run<TRole>, failure: Failure): void => {
     if (run !== active || isTerminal(current)) {
       return;
@@ -134,6 +147,10 @@ export function createIntentSession<TPrincipal, TRole extends string>(
 
   const cancelRun = (run: Run<TRole>): void => {
     if (run !== active) {
+      return;
+    }
+    if (current.name === 'undoing') {
+      undoAbort?.abort();
       return;
     }
     if (current.name === 'presenting') {
@@ -260,11 +277,14 @@ export function createIntentSession<TPrincipal, TRole extends string>(
     queueTicket += 1;
     const ticket = queueTicket;
     await Promise.resolve();
-    while (ticket === queueTicket && holdsNewCommands(current) && running) {
+    while (ticket > droppedUpTo && ticket === queueTicket && holdsNewCommands(current) && running) {
       if (current.name === 'presenting') {
         active?.reveal?.abort();
       }
       await running;
+    }
+    if (ticket <= droppedUpTo) {
+      return { name: 'cancelled' };
     }
     if (ticket !== queueTicket) {
       return current;
@@ -316,24 +336,58 @@ export function createIntentSession<TPrincipal, TRole extends string>(
     return run.last;
   };
 
-  const runUndo = async (run: Run<TRole>, planId: string): Promise<void> => {
-    try {
-      const result = await dependencies.undo.undo(planId, { signal: run.controller.signal });
-      if (result.ok) {
-        send(run, { type: 'undo.finished' });
-      } else {
-        fail(run, result.failure);
+  const attemptUndo = (planId: string, signal: AbortSignal): Promise<EffectResult<unknown>> =>
+    new Promise((resolve) => {
+      const abandon = (): void => resolve({ ok: false, failure: abortedFailure });
+      if (signal.aborted) {
+        abandon();
+        return;
       }
-    } catch {
-      fail(run, executionFailed);
+      signal.addEventListener('abort', abandon, { once: true });
+      dependencies.undo
+        .undo(planId, { signal })
+        .then(resolve, () => resolve({ ok: false, failure: executionFailed }))
+        .finally(() => signal.removeEventListener('abort', abandon));
+    });
+
+  const runUndo = async (run: Run<TRole>, planId: string): Promise<void> => {
+    const controller = new AbortController();
+    undoAbort = controller;
+    const signal = AbortSignal.any([
+      controller.signal,
+      dependencies.clock.timeout(dependencies.undoMs),
+    ]);
+    const result = await attemptUndo(planId, signal);
+    if (undoAbort !== controller) {
+      return;
+    }
+    undoAbort = undefined;
+    controller.abort();
+    if (result.ok) {
+      send(run, { type: 'undo.finished' });
+    } else {
+      fail(run, result.failure);
     }
   };
 
+  const isUndoing = (): boolean => current.name === 'undoing';
+
+  const adoptIdleRun = (): Run<TRole> => {
+    const run: Run<TRole> = {
+      controller: new AbortController(),
+      role: dependencies.activeRole(),
+      command: { text: '', source: 'text' },
+      reveal: undefined,
+      last: current,
+      origin: 'interpreter',
+      answers: {},
+    };
+    active = run;
+    return run;
+  };
+
   const undo = async (planId: string): Promise<SessionState> => {
-    const run = active;
-    if (!run) {
-      return current;
-    }
+    const run = active ?? adoptIdleRun();
     if (current.name === 'executing' && current.planId === planId) {
       await dependencies.undo
         .undo(planId, { signal: run.controller.signal })
@@ -341,8 +395,13 @@ export function createIntentSession<TPrincipal, TRole extends string>(
       await running;
       return current;
     }
+    if (isUndoing()) {
+      notice('CONFLICT');
+      return current;
+    }
     send(run, { type: 'undo.started', planId });
-    if (current.name !== 'undoing') {
+    if (!isUndoing()) {
+      notice('NOT_AVAILABLE');
       return current;
     }
     await track(runUndo(run, planId));
@@ -370,6 +429,7 @@ export function createIntentSession<TPrincipal, TRole extends string>(
       return ambiguous ? resume(undefined, capabilityId) : Promise.resolve(current);
     },
     cancel() {
+      droppedUpTo = queueTicket;
       if (active) {
         cancelRun(active);
       }
@@ -377,8 +437,15 @@ export function createIntentSession<TPrincipal, TRole extends string>(
     undo,
     reset() {
       const run = active;
+      droppedUpTo = queueTicket;
       if (run) {
-        cancelRun(run);
+        if (current.name === 'undoing') {
+          undoAbort?.abort();
+          undoAbort = undefined;
+          send(run, { type: 'failure', failure: abortedFailure });
+        } else {
+          cancelRun(run);
+        }
         send(run, { type: 'reset' });
       }
     },

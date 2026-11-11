@@ -11,7 +11,8 @@ import type {
   UndoRegistry,
 } from '../contracts/index.js';
 import { createUndoRegistry } from '../policy/index.js';
-import { noopEventBus } from '../primitives/index.js';
+import { DEFAULT_ACTION_BUDGETS } from '../action/index.js';
+import { noopEventBus, systemClock } from '../primitives/index.js';
 import { createIntentSession } from './session.js';
 import type { IntentSession } from './session.js';
 
@@ -65,6 +66,9 @@ export function createIntentKit<
         undo,
         announcer: config.announcer,
         events: config.events ?? noopEventBus,
+        clock: config.clock ?? systemClock,
+        undoMs:
+          config.budgets?.undoMs ?? config.budgets?.executeMs ?? DEFAULT_ACTION_BUDGETS.undoMs,
         principal: config.principal,
         activeRole: config.activeRole,
         locale: config.locale,

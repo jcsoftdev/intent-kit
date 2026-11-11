@@ -100,6 +100,7 @@ interface Options {
   readonly withUndo?: boolean;
   readonly withCompensator?: boolean;
   readonly holdSecondAuthorization?: Promise<void>;
+  readonly hangReveal?: boolean;
 }
 
 const failWith = (message: string): never => {
@@ -190,6 +191,9 @@ const harness = (options: Options = {}) => {
     revealer: {
       async reveal(element) {
         revealed.push(element);
+        if (options.hangReveal) {
+          await new Promise<void>(() => undefined);
+        }
       },
     },
     announcer: {
@@ -622,4 +626,16 @@ test('an abort while re-authorization is pending never calls the effect', async 
   expect(failureOf(await settled)?.code).toBe('ABORTED');
   await flush();
   expect(h.calls).toEqual([]);
+});
+
+test('a revealer that ignores abort and never settles cannot hold the action: it completes degraded at the budget', async () => {
+  const h = harness({ mounted: ['my-order:o-1'], hangReveal: true });
+  const settled = h.run();
+  await flush();
+  await h.clock.advance(6000);
+  expect((await settled).ok && (await settled)).toMatchObject({
+    ok: true,
+    value: { status: 'completed', presentation: { status: 'degraded', code: 'ABORTED' } },
+  });
+  expect(h.announcements).toHaveLength(1);
 });

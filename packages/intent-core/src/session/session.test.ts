@@ -142,6 +142,7 @@ interface Options {
   readonly confirm?: () => Promise<'confirmed' | 'declined'>;
   readonly reveal?: (signal: AbortSignal) => Promise<void>;
   readonly holdSecondAuthorization?: Promise<void>;
+  readonly compensate?: (signal: AbortSignal) => Promise<EffectResult<unknown>>;
 }
 
 const harness = (options: Options = {}) => {
@@ -165,6 +166,7 @@ const harness = (options: Options = {}) => {
   }));
   const responders = [...(options.responders ?? [])];
   const reveals: AbortSignal[] = [];
+  const compensations: AbortSignal[] = [];
   let role = 'waiter';
   const baseAuthorizer = createRoleAuthorizer((principal: Principal) => principal);
   let authorizations = 0;
@@ -200,7 +202,12 @@ const harness = (options: Options = {}) => {
     messages: {
       [descriptor.id]: { success: () => 'Pedido enviado', confirm: () => 'Confirmar' },
     },
-    compensator: { compensate: async () => ({ ok: true, output: null }) },
+    compensator: {
+      async compensate(_request, { signal }) {
+        compensations.push(signal);
+        return options.compensate ? options.compensate(signal) : { ok: true, output: null };
+      },
+    },
     clock,
     interpretation: {
       interpret(input, { signal }) {
@@ -231,6 +238,7 @@ const harness = (options: Options = {}) => {
     signals,
     announcements,
     reveals,
+    compensations,
     states,
     names,
     setRole: (next: string) => {
@@ -530,6 +538,8 @@ test('events from a superseded command never change the current state', async ()
     },
     announcer: { announce: () => undefined },
     events: { emit: () => undefined, subscribe: () => () => undefined },
+    clock: createManualClock(),
+    undoMs: 10_000,
     principal: () => ({ active: 'waiter', granted: ['waiter'] }),
     activeRole: () => 'waiter',
     locale: 'es-PE',
@@ -653,6 +663,8 @@ test('the lifecycle refuses to send once the command is cancelled', async () => 
     },
     announcer: { announce: () => undefined },
     events: { emit: () => undefined, subscribe: () => () => undefined },
+    clock: createManualClock(),
+    undoMs: 10_000,
     principal: () => ({ active: 'waiter', granted: ['waiter'] }),
     activeRole: () => 'waiter',
     locale: 'es-PE',
@@ -664,4 +676,138 @@ test('the lifecycle refuses to send once the command is cancelled', async () => 
   session.cancel();
   expect(() => lifecycles[0]?.sending('p-1', false)).toThrow();
   expect(session.state().name).toBe('cancelled');
+});
+
+const abortedResult: EffectResult<unknown> = {
+  ok: false,
+  failure: { stage: 'execution', code: 'ABORTED', retryable: true },
+};
+
+const honoringSignal = (signal: AbortSignal): Promise<EffectResult<unknown>> =>
+  Promise.resolve(signal.aborted ? abortedResult : { ok: true, output: null });
+
+const hangingUntilAborted = (signal: AbortSignal): Promise<EffectResult<unknown>> =>
+  new Promise((resolve) => {
+    signal.addEventListener('abort', () => resolve(abortedResult), { once: true });
+  });
+
+const twoPlans = [answering(complete('p-1')), answering(complete('p-2'))];
+
+test('undo of an earlier plan works after a later command was cancelled, with a compensator that honors its signal', async () => {
+  const pending = deferred<Outcome<Interpretation>>();
+  const h = harness({
+    responders: [answering(complete('p-1')), () => pending.promise],
+    compensate: honoringSignal,
+  });
+  await h.session.submit({ text: 'uno', source: 'text' });
+  const second = h.session.submit({ text: 'dos', source: 'text' });
+  await flush();
+  h.session.cancel();
+  pending.resolve(ok(unsupported));
+  await second;
+  expect(h.session.state().name).toBe('cancelled');
+  expect(await h.session.undo('p-1')).toEqual({ name: 'undone', planId: 'p-1' });
+});
+
+test('undo of an earlier plan works after reset, with a compensator that honors its signal', async () => {
+  const h = harness({
+    responders: [answering(complete('p-1')), answering(unsupported)],
+    compensate: honoringSignal,
+  });
+  await h.session.submit({ text: 'uno', source: 'text' });
+  const second = h.session.submit({ text: 'dos', source: 'text' });
+  h.session.reset();
+  await second;
+  h.session.reset();
+  expect(await h.session.undo('p-1')).toEqual({ name: 'undone', planId: 'p-1' });
+});
+
+test('a second undo while undoing runs no parallel compensation and says an undo is in progress', async () => {
+  const h = harness({ responders: twoPlans, compensate: hangingUntilAborted });
+  await h.session.submit({ text: 'uno', source: 'text' });
+  await h.session.submit({ text: 'dos', source: 'text' });
+  const first = h.session.undo('p-2');
+  await flush();
+  const refused = await h.session.undo('p-1');
+  expect(refused).toEqual({ name: 'undoing', planId: 'p-2' });
+  expect(h.compensations).toHaveLength(1);
+  expect(h.announcements.at(-1)).toEqual({ message: 'msg:CONFLICT', politeness: 'polite' });
+  h.session.cancel();
+  await first;
+});
+
+test('an undo that never settles fails retryable at its budget, keeps the offer and releases queued submits', async () => {
+  const h = harness({
+    descriptor: {
+      ...ordersCreate,
+      reversibility: { kind: 'compensate', via: 'orders.cancel', windowMs: 60_000 },
+    },
+    responders: [answering(complete('p-1')), answering(unsupported)],
+    compensate: hangingUntilAborted,
+  });
+  await h.session.submit({ text: 'uno', source: 'text' });
+  const undone = h.session.undo('p-1');
+  const queued = h.session.submit({ text: 'dos', source: 'text' });
+  await flush();
+  expect(h.session.state().name).toBe('undoing');
+  await h.clock.advance(10_000);
+  expect(await undone).toEqual({
+    name: 'failed',
+    failure: { stage: 'execution', code: 'ABORTED', retryable: true },
+  });
+  expect((await queued).name).toBe('unsupported');
+  expect(h.kit.undo.active().map((entry) => entry.planId)).toEqual(['p-1']);
+});
+
+test('cancel during undoing aborts the undo signal and ends failed ABORTED', async () => {
+  const h = harness({ responders: [answering(complete('p-1'))], compensate: hangingUntilAborted });
+  await h.session.submit({ text: 'uno', source: 'text' });
+  const undone = h.session.undo('p-1');
+  await flush();
+  h.session.cancel();
+  expect((await undone).name).toBe('failed');
+  expect(h.compensations[0]?.aborted).toBe(true);
+});
+
+test('reset during undoing aborts the undo first and returns to idle', async () => {
+  const h = harness({ responders: [answering(complete('p-1'))], compensate: hangingUntilAborted });
+  await h.session.submit({ text: 'uno', source: 'text' });
+  const undone = h.session.undo('p-1');
+  await flush();
+  h.session.reset();
+  expect(h.session.state().name).toBe('idle');
+  await undone;
+  expect(h.session.state().name).toBe('idle');
+  expect(h.compensations[0]?.aborted).toBe(true);
+});
+
+test('cancel drops a queued submit: it resolves cancelled and never interprets', async () => {
+  const release = deferred<EffectResult<unknown>>();
+  const h = harness({
+    responders: [answering(complete('p-1')), answering(complete('p-2'))],
+    effect: () => release.promise,
+  });
+  const first = h.session.submit({ text: 'uno', source: 'text' });
+  await flush();
+  const queued = h.session.submit({ text: 'dos', source: 'text' });
+  await flush();
+  h.session.cancel();
+  release.resolve({ ok: true, output: { orderId: 'o-1' } });
+  expect(completedResult(await first)?.status).toBe('completed');
+  expect(await queued).toEqual({ name: 'cancelled' });
+  expect(h.interpretations).toHaveLength(1);
+  expect(h.calls).toHaveLength(1);
+});
+
+test('an undo refused because the session is busy announces that it cannot undo now', async () => {
+  const pending = deferred<Outcome<Interpretation>>();
+  const h = harness({ responders: [answering(complete('p-1')), () => pending.promise] });
+  await h.session.submit({ text: 'uno', source: 'text' });
+  const second = h.session.submit({ text: 'dos', source: 'text' });
+  await flush();
+  expect((await h.session.undo('p-1')).name).toBe('interpreting');
+  expect(h.announcements.at(-1)).toEqual({ message: 'msg:NOT_AVAILABLE', politeness: 'polite' });
+  h.session.cancel();
+  pending.resolve(ok(unsupported));
+  await second;
 });
