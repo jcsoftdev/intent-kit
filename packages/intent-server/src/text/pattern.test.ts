@@ -1,4 +1,4 @@
-import { IntentDefinitionError } from '@jcsoftdev/intent-core';
+import { IntentDefinitionError, foldText } from '@jcsoftdev/intent-core';
 import { describe, expect, test } from 'vitest';
 import { createNormalizer } from './normalize.js';
 import { compilePattern } from './pattern.js';
@@ -67,14 +67,12 @@ describe('compilePattern', () => {
     expect(() => compilePattern('{a} con {b} listo', kindOf)).not.toThrow();
   });
 
-  test.each([
-    'haz un pedido de {dish}',
-    'pedido de un {dish}',
-    '{dish} para la mesa uno',
-    'oye {dish}',
-  ])('literal %j that the normalizer rewrites throws INVALID_PATTERN', (template) => {
-    expect(() => compilePattern(template, kindOf, createNormalizer())).toThrow('INVALID_PATTERN');
-  });
+  test.each(['haz un pedido de {dish}', 'pedido de un {dish}', 'oye {dish}'])(
+    'literal %j that the normalizer rewrites throws INVALID_PATTERN',
+    (template) => {
+      expect(() => compilePattern(template, kindOf, createNormalizer())).toThrow('INVALID_PATTERN');
+    },
+  );
 
   test('a normalizer-stable template compiles and matches normalized text', () => {
     const pattern = compilePattern('pedido de {dish} para la mesa 1', kindOf, createNormalizer());
@@ -92,5 +90,48 @@ describe('compilePattern', () => {
   ])('pattern %j throws INVALID_PATTERN', (template) => {
     expect(() => compilePattern(template, kindOf)).toThrow(IntentDefinitionError);
     expect(() => compilePattern(template, kindOf)).toThrow('INVALID_PATTERN');
+  });
+
+  describe('number words', () => {
+    const words = new Map([
+      ['un', 1],
+      ['dos', 2],
+      ['tres', 3],
+    ]);
+    const counted = compilePattern(
+      '{quantity?} {dish} para la mesa {table}',
+      (slot) => (slot === 'quantity' || slot === 'table' ? 'number' : 'text'),
+      foldText,
+      words,
+    );
+
+    test('a numeric slot accepts a number word and converts only its own capture', () => {
+      expect(counted.match('dos tres leches para la mesa tres')).toEqual({
+        quantity: '2',
+        dish: 'tres leches',
+        table: '3',
+      });
+    });
+
+    test('a captured quantity also yields the reading where the dish text keeps it', () => {
+      expect(counted.alternatives('tres leches para la mesa 3')).toEqual([
+        { dish: 'tres leches', table: '3' },
+      ]);
+      expect(counted.alternatives('leches para la mesa 3')).toEqual([]);
+    });
+
+    test('a quantity that does not precede a text slot has no alternative', () => {
+      const reserve = compilePattern(
+        'reserva {table} para {quantity} personas',
+        (slot) => (slot === 'quantity' ? 'number' : 'text'),
+        foldText,
+        words,
+      );
+      expect(reserve.match('reserva terraza para tres personas')).toEqual({
+        table: 'terraza',
+        quantity: '3',
+      });
+      expect(reserve.alternatives('reserva terraza para tres personas')).toEqual([]);
+    });
   });
 });

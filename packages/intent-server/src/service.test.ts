@@ -2,6 +2,7 @@ import {
   IntentDefinitionError,
   createCapabilityDefiner,
   getAtPath,
+  matchClosedOption,
   stageName,
 } from '@jcsoftdev/intent-core';
 import type {
@@ -10,8 +11,10 @@ import type {
   EntityQuery,
   EntityResolver,
   InterpretationInput,
+  Interpretation,
   InterpreterResult,
   MissingField,
+  Outcome,
   RequirementProbe,
 } from '@jcsoftdev/intent-core';
 import {
@@ -26,7 +29,7 @@ import { createZodSchemaAdapter } from '@jcsoftdev/intent-zod';
 import { describe, expect, test } from 'vitest';
 import { z } from 'zod';
 import { createInterpretationService } from './service.js';
-import { createNormalizer } from './text/normalize.js';
+import { createMatchKey } from './text/normalize.js';
 
 type Role = 'waiter' | 'cashier';
 
@@ -93,6 +96,16 @@ const cashShiftClose = define({
   roles: ['waiter', 'cashier'],
 });
 
+const reservationsCreate = define({
+  ...base,
+  id: 'reservations.create',
+  description: 'Reserve a table',
+  patterns: ['reserva {table} para {quantity} personas'],
+  input: z.object({ tableId: z.string(), quantity: z.number().int() }),
+  entities: [{ path: 'tableId', entity: 'table' }],
+  roles: ['waiter'],
+});
+
 const auditExport = define({
   ...base,
   id: 'audit.export',
@@ -107,6 +120,7 @@ const descriptors: readonly AnyDescriptor[] = [
   ordersCreate,
   kitchenMarkReady,
   cashShiftClose,
+  reservationsCreate,
   auditExport,
 ];
 
@@ -158,8 +172,43 @@ const milanesaProbe: RequirementProbe<Principal> = {
 
 const noInterpretation = (): InterpreterResult => ({ status: 'unsupported' });
 
+const matchKey = createMatchKey();
+
+const kitResolver = (
+  entity: string,
+  records: readonly EntityRecord[],
+): EntityResolver<Principal> => ({
+  entity,
+  async resolve(_principal, { text }) {
+    const match = matchClosedOption(text, records, matchKey);
+    return match
+      ? { status: 'found', id: match.id, label: match.label }
+      : { status: 'notFound', nearest: [] };
+  },
+  async options() {
+    return records;
+  },
+});
+
+const RESERVATION_TABLES: readonly EntityRecord[] = [
+  { id: 'tbl-terraza', label: 'Terraza' },
+  { id: 'tbl-terraza-4', label: 'Terraza 4' },
+];
+
+const CHICHA_MENU: readonly EntityRecord[] = [
+  { id: 'dish-chicha', label: 'Chicha' },
+  { id: 'dish-chicha-2l', label: 'Chicha 2 litros' },
+];
+
+const PIZZA_MENU: readonly EntityRecord[] = [
+  { id: 'dish-pizza', label: 'Pizza' },
+  { id: 'dish-pizza-4', label: 'Pizza cuatro estaciones' },
+];
+
 const harness = (
   options: {
+    readonly dishes?: readonly EntityRecord[];
+    readonly dishResolver?: EntityResolver<Principal>;
     readonly tables?: readonly EntityRecord[];
     readonly tableResolver?: EntityResolver<Principal>;
     readonly dishDelayMs?: number;
@@ -178,6 +227,7 @@ const harness = (
     createInMemoryEntityResolver<Principal>({
       entity: 'table',
       records: () => tables,
+      normalize: matchKey,
       options: () => tables.map(({ id, label, detail }) => ({ id, label, detail })),
     });
   const service = createInterpretationService<Principal, Role>({
@@ -185,12 +235,14 @@ const harness = (
     schema: createZodSchemaAdapter(),
     rolesOf: (principal) => principal,
     resolvers: [
-      createInMemoryEntityResolver<Principal>({
-        entity: 'dish',
-        records: () => DISH_RECORDS,
-        normalize: createNormalizer(),
-        ...(options.dishDelayMs === undefined ? {} : { delayMs: options.dishDelayMs, clock }),
-      }),
+      options.dishResolver ??
+        createInMemoryEntityResolver<Principal>({
+          entity: 'dish',
+          records: () => options.dishes ?? DISH_RECORDS,
+          normalize: matchKey,
+          options: () => options.dishes ?? DISH_RECORDS,
+          ...(options.dishDelayMs === undefined ? {} : { delayMs: options.dishDelayMs, clock }),
+        }),
       tableResolver,
       createInMemoryEntityResolver<Principal>({ entity: 'line', records: () => [] }),
     ],
@@ -225,26 +277,96 @@ const continuation = (
 });
 
 describe('interpretation service', () => {
-  test.each([
-    ['un tres leches para la mesa 3', 1],
-    ['dos tres leches para la mesa 3', 2],
-    ['tres leches para la mesa 3', undefined],
-    ['quiero tres leches para la mesa tres', undefined],
-    ['dos arroz con pollo para la mesa 3', 2],
-  ])(
-    'the quantity of "%s" is %s and a leading number word can be part of the dish',
-    async (text, quantity) => {
-      const { service } = harness();
+  const draftInputOf = (outcome: Outcome<Interpretation>): unknown =>
+    outcome.ok && 'draft' in outcome.value ? outcome.value.draft?.input : undefined;
+
+  const linesOf = (outcome: Outcome<Interpretation>): unknown =>
+    getAtPath(draftInputOf(outcome), 'lines');
+
+  const candidateIdsOf = (outcome: Outcome<Interpretation>): readonly string[] =>
+    outcome.ok && outcome.value.status === 'ambiguous'
+      ? outcome.value.candidates.flatMap((candidate) =>
+          candidate.kind === 'entity' ? [candidate.option.id] : [],
+        )
+      : [];
+
+  describe.each([
+    ['the strict fake resolver', undefined],
+    ['a resolver built from matchClosedOption', 'kit'],
+  ] as const)('number words with %s', (_name, kind) => {
+    const resolverFor = (records: readonly EntityRecord[]) =>
+      kind === 'kit' ? { dishResolver: kitResolver('dish', records) } : {};
+
+    test.each([
+      ['un tres leches para la mesa 3', { offeringId: 'dish-tres-leches', quantity: 1 }],
+      ['dos tres leches para la mesa 3', { offeringId: 'dish-tres-leches', quantity: 2 }],
+      ['tres leches para la mesa 3', { offeringId: 'dish-tres-leches' }],
+      ['quiero tres leches para la mesa tres', { offeringId: 'dish-tres-leches' }],
+      ['un 3 leches para la mesa 3', { offeringId: 'dish-tres-leches', quantity: 1 }],
+      ['2 arroz con pollo para la mesa 3', { offeringId: 'dish-arroz', quantity: 2 }],
+      ['dos arroz con pollo para la mesa tres', { offeringId: 'dish-arroz', quantity: 2 }],
+      ['pedido de un arroz con pollo para la mesa 3', { offeringId: 'dish-arroz' }],
+    ])('%s', async (text, line) => {
+      const { service } = harness(resolverFor(DISH_RECORDS));
       const outcome = await service.interpret(waiter, utterance(text), { signal });
       expect(outcome).toMatchObject({ ok: true, value: { status: 'complete' } });
-      const lines = (outcome as { value: { draft: { input: { lines: unknown[] } } } }).value.draft
-        .input.lines;
-      const offering = text.includes('arroz') ? 'dish-arroz' : 'dish-tres-leches';
-      expect(lines).toEqual([
-        quantity === undefined ? { offeringId: offering } : { offeringId: offering, quantity },
-      ]);
-    },
-  );
+      expect(linesOf(outcome)).toEqual([line]);
+    });
+  });
+
+  test.each([
+    ['dos chicha para la mesa 3', CHICHA_MENU],
+    ['cuatro pizza para la mesa 3', PIZZA_MENU],
+  ])('%s is ambiguous and never silently the longer dish', async (text, menu) => {
+    const { service } = harness({ dishes: menu });
+    const outcome = await service.interpret(waiter, utterance(text), { signal });
+    expect(outcome).toMatchObject({ ok: true, value: { status: 'ambiguous' } });
+    expect([...candidateIdsOf(outcome)].sort()).toEqual(menu.map(({ id }) => id).sort());
+  });
+
+  test('picking an option after the number-word ambiguity completes with that dish', async () => {
+    const { service } = harness({ dishes: CHICHA_MENU });
+    const asked = await service.interpret(waiter, utterance('dos chicha para la mesa 3'), {
+      signal,
+    });
+    const outcome = await service.interpret(
+      waiter,
+      continuation(draftInputOf(asked), { 'lines[0].offeringId': 'dish-chicha-2l' }),
+      { signal },
+    );
+    expect(outcome).toMatchObject({ ok: true, value: { status: 'complete' } });
+  });
+
+  test('a quantity from the interpreter is never re-parsed against the dish name', async () => {
+    const { service } = harness({
+      dishes: CHICHA_MENU,
+      script: () => ({
+        status: 'proposed',
+        proposals: [
+          {
+            capabilityId: 'orders.create',
+            slots: { dish: 'chicha', quantity: 2, table: '3' },
+            confidence: 0.9,
+          },
+        ],
+      }),
+    });
+    const outcome = await service.interpret(waiter, utterance('quiero algo rico'), { signal });
+    expect(linesOf(outcome)).toEqual([{ offeringId: 'dish-chicha', quantity: 2 }]);
+  });
+
+  test('a top-level entity is never glued to a number', async () => {
+    const { service } = harness({ tables: RESERVATION_TABLES });
+    const outcome = await service.interpret(
+      waiter,
+      utterance('reserva terraza para cuatro personas'),
+      { signal },
+    );
+    expect(outcome).toMatchObject({
+      ok: true,
+      value: { status: 'complete', draft: { input: { tableId: 'tbl-terraza', quantity: 4 } } },
+    });
+  });
 
   test('9.1 A: complete with planId, summary "Arroz con pollo · Mesa 3", source deterministic, draft.input.tableId is the table id', async () => {
     const { service } = harness();

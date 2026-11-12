@@ -31,11 +31,16 @@ export const SPANISH_NORMALIZATION: NormalizationRules = {
 
 const MAX_UTTERANCE_LENGTH = 500;
 
-const isQuantityBeforeNumberWord = (
+const DIGITS = /^\d/;
+
+const isQuantityBeforeNumber = (
   filler: string,
   rest: string,
   words: ReadonlyMap<string, number>,
-): boolean => words.has(filler) && words.has(rest.split(' ')[0] ?? '');
+): boolean => {
+  const next = rest.split(' ')[0] ?? '';
+  return words.has(filler) && (words.has(next) || DIGITS.test(next));
+};
 
 const stripLeadingFiller = (
   text: string,
@@ -49,7 +54,7 @@ const stripLeadingFiller = (
     return undefined;
   }
   const rest = text.slice(filler.length).trim();
-  return isQuantityBeforeNumberWord(filler, rest, words) ? undefined : rest;
+  return isQuantityBeforeNumber(filler, rest, words) ? undefined : rest;
 };
 
 const stripLeadingFillers = (
@@ -65,27 +70,38 @@ const stripLeadingFillers = (
   return current;
 };
 
+export const numberWordsOf = (
+  rules: NormalizationRules = SPANISH_NORMALIZATION,
+): ReadonlyMap<string, number> =>
+  new Map(Object.entries(rules.numberWords).map(([word, value]) => [foldText(word), value]));
+
 const replaceNumberWords = (text: string, words: ReadonlyMap<string, number>): string =>
   text
     .split(' ')
     .map((word) => String(words.get(word) ?? word))
     .join(' ');
 
-export const createNormalizer = (
-  rules: NormalizationRules = SPANISH_NORMALIZATION,
-): ((text: string) => string) => {
-  const fillers = rules.leadingFillers
+const fillersOf = (rules: NormalizationRules): readonly string[] =>
+  rules.leadingFillers
     .map(foldText)
     .filter((filler) => filler !== '')
     .sort((a, b) => b.length - a.length);
-  const words = new Map(
-    Object.entries(rules.numberWords).map(([word, value]) => [foldText(word), value]),
-  );
+
+export const createNormalizer = (
+  rules: NormalizationRules = SPANISH_NORMALIZATION,
+): ((text: string) => string) => {
+  const fillers = fillersOf(rules);
+  const words = numberWordsOf(rules);
   return (text) =>
-    replaceNumberWords(
-      stripLeadingFillers(foldText(text.slice(0, MAX_UTTERANCE_LENGTH)), fillers, words),
-      words,
-    )
+    stripLeadingFillers(foldText(text.slice(0, MAX_UTTERANCE_LENGTH)), fillers, words)
       .replace(/\s+/g, ' ')
       .trim();
+};
+
+export const createMatchKey = (
+  rules: NormalizationRules = SPANISH_NORMALIZATION,
+): ((text: string) => string) => {
+  const normalize = createNormalizer(rules);
+  const words = numberWordsOf(rules);
+  return (text) => replaceNumberWords(normalize(text), words);
 };

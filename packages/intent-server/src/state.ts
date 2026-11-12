@@ -18,6 +18,8 @@ export interface InterpretationState<TPrincipal> {
   readonly proposal: Proposal;
   readonly origin: InterpretationOrigin;
   readonly draft: Draft;
+  readonly alternativeSlots: readonly Proposal['slots'][];
+  readonly alternativeInputs: readonly unknown[];
   readonly answers: Answers;
   readonly resolvedInput: unknown;
   readonly labels: Readonly<Record<string, string>>;

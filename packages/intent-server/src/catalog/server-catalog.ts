@@ -44,6 +44,7 @@ export interface ServerCatalogConfig {
   readonly resolverEntities: readonly string[];
   readonly requirementPaths?: ReadonlyMap<string, readonly string[]>;
   readonly normalize: (text: string) => string;
+  readonly numberWords?: ReadonlyMap<string, number>;
 }
 
 const SLOT_CAPS = 'patterns allow at most 4 slots, at most 2 text slots and no slot inside (a|b)';
@@ -240,12 +241,13 @@ const compilePatterns = (
   inputJsonSchema: JsonObject,
   slots: SlotIndex,
   normalize: (text: string) => string,
+  numberWords: ReadonlyMap<string, number>,
 ): readonly CompiledPattern[] => {
   const kindOf = slotKindResolver(descriptor, inputJsonSchema, slots);
   return bySpecificity(
     descriptor.patterns.map((template) => {
       try {
-        return compilePattern(template, kindOf, normalize);
+        return compilePattern(template, kindOf, normalize, numberWords);
       } catch (error) {
         if (error instanceof IntentDefinitionError && error.reason === 'INVALID_PATTERN') {
           throw new IntentDefinitionError(
@@ -374,7 +376,13 @@ const buildEntry = (config: ServerCatalogConfig, descriptor: AnyDescriptor): Cat
     },
     slots,
     requirementPaths,
-    patterns: compilePatterns(descriptor, inputJsonSchema, slots, config.normalize),
+    patterns: compilePatterns(
+      descriptor,
+      inputJsonSchema,
+      slots,
+      config.normalize,
+      config.numberWords ?? new Map(),
+    ),
   };
 };
 

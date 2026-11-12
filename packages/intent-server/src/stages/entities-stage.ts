@@ -1,5 +1,6 @@
 import {
   expandPattern,
+  foldText,
   getAtPath,
   matchesPattern,
   parsePath,
@@ -7,6 +8,7 @@ import {
 } from '@jcsoftdev/intent-core';
 import type {
   Answers,
+  Draft,
   PathSegment,
   ClosedOption,
   EntityParam,
@@ -80,12 +82,7 @@ export const withoutSegments = (value: unknown, segments: readonly PathSegment[]
 };
 
 type PathResult =
-  | {
-      readonly kind: 'resolved';
-      readonly id: string;
-      readonly label: string;
-      readonly gluedQuantityPath?: string;
-    }
+  | { readonly kind: 'resolved'; readonly id: string; readonly label: string }
   | { readonly kind: 'ambiguous'; readonly options: readonly ClosedOption[] }
   | { readonly kind: 'skipped' }
   | { readonly kind: 'failed'; readonly outcome: Outcome<never> };
@@ -94,6 +91,7 @@ interface ResolvedEntry {
   readonly path: string;
   readonly entity: string;
   readonly id: string;
+  readonly exact: boolean;
 }
 
 const INVALID_RESULT: PathResult = { kind: 'failed', outcome: invalidInputInResolution };
@@ -102,11 +100,86 @@ const NOT_FOUND_RESULT: PathResult = {
   outcome: failureOutcome({ stage: 'resolution', code: 'ENTITY_NOT_FOUND', retryable: false }),
 };
 
-const QUANTITY_KEY = 'quantity';
+interface ResolvedReading {
+  readonly kind: 'resolved';
+  readonly reading: Draft;
+  readonly input: unknown;
+  readonly labels: Readonly<Record<string, string>>;
+  readonly resolved: readonly ResolvedEntry[];
+  readonly consumed: readonly string[];
+}
 
-const siblingQuantityPath = (path: string): string => {
-  const parent = parentOf(path);
-  return parent === '' ? QUANTITY_KEY : `${parent}.${QUANTITY_KEY}`;
+type Reading =
+  ResolvedReading | { readonly kind: 'stopped'; readonly outcome: Outcome<Interpretation> };
+
+type Chosen =
+  | ResolvedReading
+  | { readonly kind: 'stopped'; readonly outcome: Outcome<Interpretation> }
+  | { readonly kind: 'ambiguous'; readonly outcome: Outcome<Interpretation> };
+
+const signatureOf = (reading: ResolvedReading): string =>
+  JSON.stringify(reading.resolved.map(({ path, id }) => [path, id]));
+
+const firstDifferingPath = (readings: readonly ResolvedReading[]): string | undefined => {
+  const [first, ...others] = readings;
+  return first?.resolved
+    .map(({ path }) => path)
+    .find((path) =>
+      others.some(
+        (other) =>
+          other.resolved.find((entry) => entry.path === path)?.id !==
+          first.resolved.find((entry) => entry.path === path)?.id,
+      ),
+    );
+};
+
+const ambiguityBetween = (readings: readonly ResolvedReading[]): Chosen => {
+  const [first] = readings;
+  const path = firstDifferingPath(readings);
+  if (!first || path === undefined) {
+    return { kind: 'stopped', outcome: invalidInputInResolution };
+  }
+  const options = readings.flatMap((reading) => {
+    const id = reading.resolved.find((entry) => entry.path === path)?.id;
+    const label = reading.labels[path];
+    return id === undefined || label === undefined ? [] : [{ id, label }];
+  });
+  const unique = options.filter(
+    (option, index) => options.findIndex(({ id }) => id === option.id) === index,
+  );
+  return {
+    kind: 'ambiguous',
+    outcome: {
+      ok: true,
+      value: {
+        status: 'ambiguous',
+        draft: { ...first.reading, input: withoutSegments(first.reading.input, parsePath(path)) },
+        candidates: unique.map((option) => ({ kind: 'entity', path, option })),
+      },
+    },
+  };
+};
+
+const exactCount = (reading: ResolvedReading): number =>
+  reading.resolved.filter(({ exact }) => exact).length;
+
+const chooseReading = (readings: readonly Reading[]): Chosen => {
+  const [primary] = readings;
+  const resolved = readings.filter(
+    (reading): reading is ResolvedReading => reading.kind === 'resolved',
+  );
+  if (resolved.length === 0 || !primary) {
+    return primary?.kind === 'stopped'
+      ? primary
+      : { kind: 'stopped', outcome: invalidInputInResolution };
+  }
+  const signatures = new Set(resolved.map(signatureOf));
+  if (signatures.size > 1) {
+    return ambiguityBetween(resolved);
+  }
+  return resolved.reduce((best, reading) =>
+    exactCount(reading) > exactCount(best) ? reading : best,
+  );
 };
 
 const parentOf = (path: string): string => /^(.*\])\.[^\]]*$/.exec(path)?.[1] ?? '';
@@ -149,11 +222,12 @@ const concretePathsOf = (
 export const createEntitiesStage = <TPrincipal>(config: {
   readonly resolvers: ResolverRegistry<TPrincipal>;
   readonly budgetMs: number;
+  readonly matchKey?: (text: string) => string;
 }): Stage<InterpretationState<TPrincipal>, Interpretation> => ({
   name: INTERPRETATION_STAGES.entities,
   phase: 'resolution',
   requires: ['catalog', 'principal', 'draft', 'answers'],
-  provides: ['resolvedInput', 'labels', 'answers'],
+  provides: ['resolvedInput', 'labels', 'answers', 'draft'],
   budget: {
     timeoutMs: config.budgetMs,
     onTimeout: { stage: 'resolution', code: 'RESOLUTION_UNAVAILABLE', retryable: true },
@@ -170,11 +244,12 @@ export const createEntitiesStage = <TPrincipal>(config: {
       return invalidInputInResolution;
     }
     const resolveAt = async (
+      reading: Draft,
       path: string,
       param: EntityParam,
       resolved: readonly ResolvedEntry[],
     ): Promise<PathResult> => {
-      const text: unknown = getAtPath(draft.input, path);
+      const text: unknown = getAtPath(reading.input, path);
       const answer = answerTextOf(answers, path);
       if (answer === null || (text !== undefined && typeof text !== 'string')) {
         return INVALID_RESULT;
@@ -189,30 +264,12 @@ export const createEntitiesStage = <TPrincipal>(config: {
             ? { kind: 'skipped' }
             : pickOption(
                 answer,
-                await resolver.options(principal, path, draft, { signal: context.signal }),
+                await resolver.options(principal, path, reading, { signal: context.signal }),
               );
-        }
-        const query = { hints: hintsFor(path, resolved), scope: param.scope ?? 'any' } as const;
-        const quantityPath = siblingQuantityPath(path);
-        const quantity: unknown = getAtPath(draft.input, quantityPath);
-        if (typeof quantity === 'number' && answer === undefined) {
-          const glued = await resolver.resolve(
-            principal,
-            { ...query, text: `${quantity} ${text}` },
-            { signal: context.signal },
-          );
-          if (glued.status === 'found') {
-            return {
-              kind: 'resolved',
-              id: glued.id,
-              label: glued.label,
-              gluedQuantityPath: quantityPath,
-            };
-          }
         }
         const resolution = await resolver.resolve(
           principal,
-          { ...query, text },
+          { text, hints: hintsFor(path, resolved), scope: param.scope ?? 'any' },
           { signal: context.signal },
         );
         if (resolution.status === 'found') {
@@ -232,40 +289,65 @@ export const createEntitiesStage = <TPrincipal>(config: {
         return { kind: 'failed', outcome: unavailableUnlessAborted(context.signal, error) };
       }
     };
-    let input = draft.input;
-    const labels: Record<string, string> = {};
-    const resolved: ResolvedEntry[] = [];
-    const consumed: string[] = [];
-    for (const param of entry.descriptor.entities) {
-      for (const path of concretePathsOf(param, draft.input, answers)) {
-        const result = await resolveAt(path, param, resolved);
-        if (result.kind === 'failed') {
-          return result.outcome;
-        }
-        if (result.kind === 'ambiguous') {
-          return {
-            ok: true,
-            value: {
-              status: 'ambiguous',
-              draft,
-              candidates: result.options.map((option) => ({ kind: 'entity', path, option })),
-            },
-          };
-        }
-        if (result.kind === 'resolved') {
-          input = setAtPath(input, path, result.id);
-          if (result.gluedQuantityPath !== undefined) {
-            input = withoutSegments(input, parsePath(result.gluedQuantityPath));
+    const keyOf = config.matchKey ?? foldText;
+    const isExact = (text: unknown, label: string): boolean =>
+      typeof text === 'string' && keyOf(text) === keyOf(label);
+    const readInput = async (reading: Draft): Promise<Reading> => {
+      let input = reading.input;
+      const labels: Record<string, string> = {};
+      const resolved: ResolvedEntry[] = [];
+      const consumed: string[] = [];
+      for (const param of entry.descriptor.entities) {
+        for (const path of concretePathsOf(param, reading.input, answers)) {
+          const result = await resolveAt(reading, path, param, resolved);
+          if (result.kind === 'failed') {
+            return { kind: 'stopped', outcome: result.outcome };
           }
-          labels[path] = result.label;
-          resolved.push({ path, entity: param.entity, id: result.id });
-          consumed.push(path);
+          if (result.kind === 'ambiguous') {
+            return {
+              kind: 'stopped',
+              outcome: {
+                ok: true,
+                value: {
+                  status: 'ambiguous',
+                  draft: reading,
+                  candidates: result.options.map((option) => ({ kind: 'entity', path, option })),
+                },
+              },
+            };
+          }
+          if (result.kind === 'resolved') {
+            input = setAtPath(input, path, result.id);
+            labels[path] = result.label;
+            resolved.push({
+              path,
+              entity: param.entity,
+              id: result.id,
+              exact: isExact(getAtPath(reading.input, path), result.label),
+            });
+            consumed.push(path);
+          }
         }
       }
+      return { kind: 'resolved', reading, input, labels, resolved, consumed };
+    };
+    const primary = await readInput(draft);
+    const alternatives = context.find('alternativeInputs') ?? [];
+    const readings = [
+      primary,
+      ...(await Promise.all(alternatives.map((input) => readInput({ ...draft, input })))),
+    ];
+    const chosen = chooseReading(readings);
+    if (chosen.kind === 'stopped') {
+      return chosen.outcome;
     }
-    context.set('resolvedInput', input);
-    context.set('labels', labels);
-    context.set('answers', withoutAnswers(answers, consumed));
+    if (chosen.kind === 'ambiguous') {
+      return chosen.outcome;
+    }
+    context.set('draft', chosen.reading);
+    context.set('resolvedInput', chosen.input);
+    context.set('labels', chosen.labels);
+    context.set('answers', withoutAnswers(answers, chosen.consumed));
     return next();
   },
 });

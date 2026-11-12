@@ -38,7 +38,7 @@ import { createPlanTerminal } from './stages/plan-terminal.js';
 import { createRequirementsStage } from './stages/requirements-stage.js';
 import { createValidateStage } from './stages/validate-stage.js';
 import type { InterpretationState } from './state.js';
-import { createNormalizer } from './text/normalize.js';
+import { createMatchKey, createNormalizer, numberWordsOf } from './text/normalize.js';
 import type { NormalizationRules } from './text/normalize.js';
 
 export interface InterpretationBudgets {
@@ -137,6 +137,7 @@ export function createInterpretationService<TPrincipal, TRole extends string>(
       (config.probes ?? []).map((probe) => [probe.capabilityId, probe.paths]),
     ),
     normalize,
+    numberWords: numberWordsOf(config.normalization),
   });
   const base = createPipelineBuilder<InterpretationState<TPrincipal>, Interpretation>({
     name: PIPELINE_NAME,
@@ -156,7 +157,13 @@ export function createInterpretationService<TPrincipal, TRole extends string>(
       }),
     )
     .use(createDraftStage(copy))
-    .use(createEntitiesStage({ resolvers, budgetMs: budgets.entitiesMs }))
+    .use(
+      createEntitiesStage({
+        resolvers,
+        budgetMs: budgets.entitiesMs,
+        matchKey: createMatchKey(config.normalization),
+      }),
+    )
     .use(createRequirementsStage({ probes, budgetMs: budgets.requirementsMs }))
     .use(createValidateStage({ schema: config.schema, resolvers, copy }))
     .use(createAuthorizeStage(config.authorizer ?? createRoleAuthorizer(config.rolesOf)));

@@ -2,10 +2,13 @@ import { IntentDefinitionError, foldText } from '@jcsoftdev/intent-core';
 
 export type SlotKind = 'text' | 'number';
 
+export type CapturedSlots = Readonly<Record<string, string>>;
+
 export interface CompiledPattern {
   readonly template: string;
   readonly slots: readonly string[];
-  match(normalized: string): Readonly<Record<string, string>> | undefined;
+  match(normalized: string): CapturedSlots | undefined;
+  alternatives(normalized: string): readonly CapturedSlots[];
 }
 
 type Element =
@@ -112,12 +115,18 @@ const parseElement = (token: string, fold: Fold, template: string): Element => {
   return { kind: 'literal', source: wordSource(token, fold, template) };
 };
 
-const slotSource = (kind: SlotKind, group: string): string =>
-  kind === 'number' ? `(?<${group}>\\d+)` : `(?<${group}>.+?)`;
+const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const numberSource = (words: ReadonlyMap<string, number>): string =>
+  ['\\d+', ...[...words.keys()].sort((a, b) => b.length - a.length).map(escapeRegExp)].join('|');
+
+const slotSource = (kind: SlotKind, group: string, numbers: string): string =>
+  kind === 'number' ? `(?<${group}>${numbers})` : `(?<${group}>.+?)`;
 
 const assemble = (
   elements: readonly Element[],
   kindOf: (slot: string) => SlotKind,
+  numbers: string,
 ): { readonly source: string; readonly groups: ReadonlyMap<string, string> } => {
   const groups = new Map<string, string>();
   let source = '';
@@ -131,7 +140,7 @@ const assemble = (
     }
     const group = `s${groups.size}`;
     groups.set(group, element.name);
-    const capture = slotSource(kindOf(element.name), group);
+    const capture = slotSource(kindOf(element.name), group, numbers);
     if (!element.optional) {
       source += `${separator}${capture}`;
     } else if (position === 0) {
@@ -162,10 +171,38 @@ const assertSeparated = (
   });
 };
 
+const splittableNumberSlot = (
+  elements: readonly Element[],
+  kindOf: (slot: string) => SlotKind,
+): number => {
+  const first = elements.findIndex(
+    (element, position) =>
+      element.kind === 'slot' &&
+      element.optional &&
+      kindOf(element.name) === 'number' &&
+      elements[position + 1]?.kind === 'slot' &&
+      kindOf((elements[position + 1] as Extract<Element, { kind: 'slot' }>).name) === 'text',
+  );
+  return first;
+};
+
+const convertNumbers = (
+  captured: CapturedSlots,
+  numberSlots: ReadonlySet<string>,
+  words: ReadonlyMap<string, number>,
+): CapturedSlots =>
+  Object.fromEntries(
+    Object.entries(captured).map(([name, value]) => [
+      name,
+      numberSlots.has(name) ? String(words.get(value) ?? value) : value,
+    ]),
+  );
+
 export const compilePattern = (
   template: string,
   kindOf: (slot: string) => SlotKind,
   fold: (text: string) => string = foldText,
+  words: ReadonlyMap<string, number> = new Map(),
 ): CompiledPattern => {
   const elements = tokenize(template).map((token) => parseElement(token, fold, template));
   assertSeparated(elements, kindOf, template);
@@ -178,12 +215,12 @@ export const compilePattern = (
   ) {
     throw invalid(template);
   }
-  const { source, groups } = assemble(elements, kindOf);
-  const expression = new RegExp(`^${source}$`, 'u');
-  return {
-    template,
-    slots: names,
-    match(normalized) {
+  const numbers = numberSource(words);
+  const numberSlots = new Set(names.filter((name) => kindOf(name) === 'number'));
+  const runner = (parts: readonly Element[]) => {
+    const { source, groups } = assemble(parts, kindOf, numbers);
+    const expression = new RegExp(`^${source}$`, 'u');
+    return (normalized: string): CapturedSlots | undefined => {
       const found = expression.exec(fold(normalized));
       if (!found?.groups) {
         return undefined;
@@ -194,7 +231,22 @@ export const compilePattern = (
       });
       return captured.some(([, value]) => value.trim() === '')
         ? undefined
-        : Object.fromEntries(captured);
+        : convertNumbers(Object.fromEntries(captured), numberSlots, words);
+    };
+  };
+  const primary = runner(elements);
+  const splitAt = splittableNumberSlot(elements, kindOf);
+  const split = splitAt < 0 ? undefined : runner(elements.filter((_, index) => index !== splitAt));
+  const splitName =
+    splitAt < 0 ? undefined : (elements[splitAt] as Extract<Element, { kind: 'slot' }>).name;
+  return {
+    template,
+    slots: names,
+    match: primary,
+    alternatives(normalized) {
+      const first = primary(normalized);
+      const second = split?.(normalized);
+      return first && second && splitName !== undefined && splitName in first ? [second] : [];
     },
   };
 };

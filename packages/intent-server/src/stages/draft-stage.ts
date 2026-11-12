@@ -10,7 +10,7 @@ export const createDraftStage = <TPrincipal>(
   name: INTERPRETATION_STAGES.draft,
   phase: 'interpretation',
   requires: ['catalog'],
-  provides: ['draft', 'answers'],
+  provides: ['draft', 'answers', 'alternativeInputs'],
   async run(context, next) {
     const view = context.get('catalog');
     const seeded = context.find('draft');
@@ -38,6 +38,10 @@ export const createDraftStage = <TPrincipal>(
       version: entry.descriptor.version,
       input: buildDraftInput(entry.slots, proposal.slots),
     });
+    context.set(
+      'alternativeInputs',
+      (context.find('alternativeSlots') ?? []).map((slots) => buildDraftInput(entry.slots, slots)),
+    );
     context.set('answers', {});
     return next();
   },
