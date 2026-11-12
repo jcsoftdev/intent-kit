@@ -1,6 +1,6 @@
 {
   "name": "@jcsoftdev/intent-zod",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Zod schema adapter for the intent kit.",
   "author": "jcsoftdev",
   "license": "MIT",

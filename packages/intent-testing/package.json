@@ -1,6 +1,6 @@
 {
   "name": "@jcsoftdev/intent-testing",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Fakes and contract suites for the intent kit ports.",
   "author": "jcsoftdev",
   "license": "MIT",
