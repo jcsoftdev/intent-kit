@@ -247,4 +247,26 @@ describe('the keyword interpreter', () => {
       }),
     );
   });
+
+  it('asks for the dish at the first line when the utterance names none, and completes on a text answer', async () => {
+    const playground = createPlayground({ principal: waiter });
+
+    const asked = await playground.session.submit({
+      text: 'mándale algo a la mesa 3',
+      source: 'text',
+    });
+
+    const interpretation = clarificationOf(asked);
+    expect(interpretation.status === 'incomplete' && interpretation.missing[0]?.path).toBe(
+      'lines[0].offeringId',
+    );
+    expect(optionLabels(asked)).toContain('Arroz con pollo');
+
+    const state = await playground.session.answerByText('arroz con pollo');
+
+    completedResult(state);
+    const [order] = playground.store.orders(TENANT_ID);
+    expect(order?.total).toBe(28);
+    expect(order?.tableId).toBe(FIXTURE_IDS.tableSalon3);
+  });
 });

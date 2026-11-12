@@ -1,5 +1,5 @@
-import { overlaps, setAtPath } from '@jcsoftdev/intent-core';
-import type { Interpretation, SchemaAdapter, Stage } from '@jcsoftdev/intent-core';
+import { formatPath, overlaps, parsePath, setAtPath } from '@jcsoftdev/intent-core';
+import type { Interpretation, PathSegment, SchemaAdapter, Stage } from '@jcsoftdev/intent-core';
 import { pruneToSchema } from '../catalog/prune-input.js';
 import type { InterpretationCopy } from '../copy.js';
 import { INTERPRETATION_STAGES } from '../state.js';
@@ -11,6 +11,22 @@ import {
   unavailableUnlessAborted,
 } from './entities-stage.js';
 import type { ResolverRegistry } from './entities-stage.js';
+
+const FIRST_ITEM = 0;
+
+const concreteSegment = (segment: PathSegment): PathSegment =>
+  segment === '[]' ? FIRST_ITEM : segment;
+
+const askedEntityPath = (missing: string, entityPath: string): string => {
+  const missingSegments = parsePath(missing);
+  const entitySegments = parsePath(entityPath);
+  if (missingSegments.length >= entitySegments.length) {
+    return missing;
+  }
+  return formatPath(
+    entitySegments.map((segment, index) => concreteSegment(missingSegments[index] ?? segment)),
+  );
+};
 
 export const createValidateStage = <TPrincipal>(config: {
   readonly schema: SchemaAdapter;
@@ -68,10 +84,11 @@ export const createValidateStage = <TPrincipal>(config: {
       return { ok: false, failure: validated.failure };
     }
     const param = descriptor.entities.find((candidate) => overlaps(first, candidate.path));
+    const asked = param ? askedEntityPath(first, param.path) : first;
     const resolver = param ? config.resolvers.get(param.entity) : undefined;
     let options;
     try {
-      options = await resolver?.options(context.get('principal'), first, draft, {
+      options = await resolver?.options(context.get('principal'), asked, draft, {
         signal: context.signal,
       });
     } catch (error) {
@@ -84,9 +101,9 @@ export const createValidateStage = <TPrincipal>(config: {
         draft,
         missing: [
           {
-            path: first,
+            path: asked,
             reason: 'required',
-            prompt: config.copy.promptFor(descriptor.id, first),
+            prompt: config.copy.promptFor(descriptor.id, asked),
             ...(options ? { options } : {}),
           },
         ],
