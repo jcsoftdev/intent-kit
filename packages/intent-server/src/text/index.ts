@@ -1,3 +1,11 @@
-export * from './normalize.js';
-export * from './pattern.js';
-export * from './slots.js';
+export {
+  SPANISH_NORMALIZATION,
+  createMatchKey,
+  createNormalizer,
+  numberWordsOf,
+} from './normalize.js';
+export type { NormalizationRules } from './normalize.js';
+export { compilePattern } from './pattern.js';
+export type { CapturedSlots, CompiledPattern, SlotKind } from './pattern.js';
+export { ambiguousSlotKeys, buildDraftInput, buildSlotIndex, resolveSlotKey } from './slots.js';
+export type { SlotIndex, SlotTarget } from './slots.js';
