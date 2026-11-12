@@ -1,0 +1,8 @@
+{
+  "packages": [
+    "packages/intent-core",
+    "packages/intent-zod",
+    "packages/intent-server",
+    "packages/intent-testing"
+  ]
+}

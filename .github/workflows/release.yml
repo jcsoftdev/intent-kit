@@ -1,0 +1,60 @@
+name: release
+
+# Publishes the packages listed in .github/publish-packages.json to npm when a tag v<version> is
+# pushed. Authenticates with npm trusted publishing (OIDC, configured on npmjs.com for this repo
+# and workflow): no token.
+
+on:
+  push:
+    tags: ['v*']
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+      - name: Plan release (lockstep versions, tag match, enabled packages)
+        id: plan
+        run: |
+          {
+            echo "dirs<<EOF"
+            node scripts/release-plan.mjs "${GITHUB_REF_NAME}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm check
+      - name: Upgrade npm (trusted publishing needs npm 11.5.1 or later)
+        run: npm install -g npm@latest
+      - name: Publish enabled packages
+        # .github/publish-packages.json lists the packages to publish, in dependency order. Configure
+        # each package's trusted publisher on npmjs.com first (repo jcsoftdev/intent-kit, workflow
+        # release.yml). pnpm pack rewrites workspace: specifiers; npm publish of the tarball keeps
+        # OIDC trusted publishing and provenance.
+        run: |
+          set -euo pipefail
+          while read -r dir; do
+            [ -n "$dir" ] || continue
+            name=$(node -p "require('./$dir/package.json').name")
+            version=$(node -p "require('./$dir/package.json').version")
+            if npm view "$name@$version" version >/dev/null 2>&1; then
+              echo "$name@$version is already published, skipping"
+              continue
+            fi
+            tarball_dir=$(mktemp -d)
+            (cd "$dir" && pnpm pack --pack-destination "$tarball_dir")
+            npm publish "$tarball_dir"/*.tgz --access public --provenance
+          done <<< "${{ steps.plan.outputs.dirs }}"

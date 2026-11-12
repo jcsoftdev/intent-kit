@@ -1,8 +1,7 @@
 {
   "name": "@jcsoftdev/intent-server",
   "version": "0.0.0",
-  "private": true,
-  "description": "Intent kit server package",
+  "description": "Server side of the intent kit: turns an utterance into a validated, tenant-scoped plan.",
   "author": "jcsoftdev",
   "license": "MIT",
   "type": "module",
@@ -21,7 +20,8 @@
   },
   "files": [
     "dist",
-    "LICENSE"
+    "LICENSE",
+    "README.md"
   ],
   "scripts": {
     "build": "rm -rf dist && tsc -p tsconfig.build.json",
@@ -34,5 +34,8 @@
     "@jcsoftdev/intent-testing": "workspace:*",
     "@jcsoftdev/intent-zod": "workspace:*",
     "zod": "4.6.7"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

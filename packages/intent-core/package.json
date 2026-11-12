@@ -1,8 +1,7 @@
 {
   "name": "@jcsoftdev/intent-core",
   "version": "0.0.0",
-  "private": true,
-  "description": "Intent kit core package",
+  "description": "Client core of the intent kit: capability descriptors, the action pipeline and the intent session.",
   "author": "jcsoftdev",
   "license": "MIT",
   "type": "module",
@@ -21,10 +20,14 @@
   },
   "files": [
     "dist",
-    "LICENSE"
+    "LICENSE",
+    "README.md"
   ],
   "scripts": {
     "build": "rm -rf dist && tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

@@ -1,8 +1,7 @@
 {
   "name": "@jcsoftdev/intent-zod",
   "version": "0.0.0",
-  "private": true,
-  "description": "Intent kit zod package",
+  "description": "Zod schema adapter for the intent kit.",
   "author": "jcsoftdev",
   "license": "MIT",
   "type": "module",
@@ -21,7 +20,8 @@
   },
   "files": [
     "dist",
-    "LICENSE"
+    "LICENSE",
+    "README.md"
   ],
   "scripts": {
     "build": "rm -rf dist && tsc -p tsconfig.build.json",
@@ -35,5 +35,8 @@
   },
   "devDependencies": {
     "zod": "4.6.7"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

@@ -1,8 +1,7 @@
 {
   "name": "@jcsoftdev/intent-testing",
   "version": "0.0.0",
-  "private": true,
-  "description": "Intent kit testing package",
+  "description": "Fakes and contract suites for the intent kit ports.",
   "author": "jcsoftdev",
   "license": "MIT",
   "type": "module",
@@ -25,7 +24,8 @@
   },
   "files": [
     "dist",
-    "LICENSE"
+    "LICENSE",
+    "README.md"
   ],
   "scripts": {
     "build": "rm -rf dist && tsc -p tsconfig.build.json",
@@ -45,5 +45,8 @@
   "devDependencies": {
     "@jcsoftdev/intent-zod": "workspace:*",
     "zod": "4.6.7"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }
