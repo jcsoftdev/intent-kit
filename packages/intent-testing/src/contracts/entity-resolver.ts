@@ -22,9 +22,6 @@ export interface EntityResolverContractFixture<TPrincipal> {
   readonly foreign: { readonly principal: TPrincipal; readonly hiddenIds: readonly string[] };
 }
 
-const LABEL_ROUND_TRIP =
-  'labels should resolve back to their own id; when one does not, an answered number-word pick is written back as the spoken text and may be asked again';
-
 const queryFor = (text: string): EntityQuery => ({ text, hints: {}, scope: 'any' });
 
 const idsIn = (resolution: EntityResolution): readonly string[] => {
@@ -47,7 +44,7 @@ export function describeEntityResolverContract<TPrincipal>(
   name: string,
   factory: () => EntityResolverContractFixture<TPrincipal>,
 ): void {
-  describe(`${name} entity resolver contract (${LABEL_ROUND_TRIP})`, () => {
+  describe(`${name} entity resolver contract`, () => {
     const signal = new AbortController().signal;
 
     it('resolves the exact text to found with the expected id', async () => {
@@ -89,6 +86,24 @@ export function describeEntityResolverContract<TPrincipal>(
       const texts = [exact.text, exact.variant, ambiguous.text, unknown];
       for (const text of texts) {
         const resolution = await resolver.resolve(foreign.principal, queryFor(text), { signal });
+        expect(idsIn(resolution).filter((id) => foreign.hiddenIds.includes(id))).toEqual([]);
+      }
+    });
+
+    it('a record id sent as query text never resolves to that record unless its label is the id', async () => {
+      const { resolver, principal, exact } = factory();
+      const resolution = await resolver.resolve(principal, queryFor(exact.id), { signal });
+      const foundById = resolution.status === 'found' && resolution.id === exact.id;
+      expect(foundById && exact.text !== exact.id).toBe(false);
+    });
+
+    it('tenant isolation: the foreign principal sending a hidden id as query text never sees a hidden id', async () => {
+      const { resolver, foreign } = factory();
+      expect(foreign.hiddenIds.length).toBeGreaterThan(0);
+      for (const hiddenId of foreign.hiddenIds) {
+        const resolution = await resolver.resolve(foreign.principal, queryFor(hiddenId), {
+          signal,
+        });
         expect(idsIn(resolution).filter((id) => foreign.hiddenIds.includes(id))).toEqual([]);
       }
     });
