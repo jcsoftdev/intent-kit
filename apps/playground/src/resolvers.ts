@@ -1,10 +1,27 @@
 import { createInMemoryEntityResolver } from '@jcsoftdev/intent-testing';
-import type { ClosedOption, Clock, EntityResolver } from '@jcsoftdev/intent-core';
+import type { ClosedOption, Clock, EntityResolution, EntityResolver } from '@jcsoftdev/intent-core';
 import type { EntityRecord } from '@jcsoftdev/intent-testing';
 import { MINUTE_MS, tableLabel } from './restaurant.js';
 import type { KitchenLineRecord, PlaygroundPrincipal, RestaurantStore } from './restaurant.js';
 
 const PENDING_STATES: ReadonlySet<string> = new Set(['EN_COLA', 'PREPARANDO']);
+
+const NUMBER = /^\d+$/;
+
+const isNumber = (word: string): boolean => NUMBER.test(word);
+
+const wordsOf = (key: string): readonly string[] => (key === '' ? [] : key.split(' '));
+
+const sharingAWord = (
+  resolution: Extract<EntityResolution, { status: 'notFound' }>,
+  queryWords: readonly string[],
+  normalize: (text: string) => string,
+): EntityResolution => ({
+  status: 'notFound',
+  nearest: resolution.nearest.filter((option) =>
+    wordsOf(normalize(option.label)).some((word) => queryWords.includes(word)),
+  ),
+});
 
 export interface ResolverDependencies {
   readonly store: RestaurantStore;
@@ -64,9 +81,30 @@ export function createPlaygroundResolvers(
       options: (principal) => records(principal).map(toOption),
     });
 
+  const withoutBareNumbers = (
+    resolver: EntityResolver<PlaygroundPrincipal>,
+  ): EntityResolver<PlaygroundPrincipal> => ({
+    entity: resolver.entity,
+    options: (principal, path, draft, options) => resolver.options(principal, path, draft, options),
+    async resolve(principal, query, options) {
+      const queryWords = wordsOf(normalize(query.text));
+      if (queryWords.every(isNumber)) {
+        return { status: 'notFound', nearest: [] };
+      }
+      const resolution = await resolver.resolve(principal, query, options);
+      return resolution.status === 'notFound'
+        ? sharingAWord(
+            resolution,
+            queryWords.filter((word) => !isNumber(word)),
+            normalize,
+          )
+        : resolution;
+    },
+  });
+
   return [
     resolverOver('table', tableRecords),
-    resolverOver('dish', dishRecords),
+    withoutBareNumbers(resolverOver('dish', dishRecords)),
     resolverOver('kitchenLine', lineRecords),
   ];
 }

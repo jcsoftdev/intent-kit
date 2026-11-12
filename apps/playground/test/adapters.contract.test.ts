@@ -1,6 +1,6 @@
 import { createManualClock } from '@jcsoftdev/intent-core';
 import type { InterpretRequest } from '@jcsoftdev/intent-core';
-import { SPANISH_NORMALIZATION, createNormalizer } from '@jcsoftdev/intent-server';
+import { SPANISH_NORMALIZATION, createMatchKey } from '@jcsoftdev/intent-server';
 import {
   describeEffectContract,
   describeEntityResolverContract,
@@ -62,7 +62,7 @@ const dishResolver = () => {
   const resolver = createPlaygroundResolvers({
     store,
     clock: createManualClock(),
-    normalize: createNormalizer(SPANISH_NORMALIZATION),
+    normalize: createMatchKey(SPANISH_NORMALIZATION),
   }).find(({ entity }) => entity === 'dish');
   if (!resolver) {
     throw new Error('the dish resolver is missing');

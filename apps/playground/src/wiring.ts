@@ -24,7 +24,7 @@ import {
   INTERPRETATION_STAGES,
   SPANISH_NORMALIZATION,
   createInterpretationService,
-  createNormalizer,
+  createMatchKey,
 } from '@jcsoftdev/intent-server';
 import type { InterpretationService, InterpretationState } from '@jcsoftdev/intent-server';
 import {
@@ -204,7 +204,7 @@ export function createPlayground(options: PlaygroundOptions): Playground {
   const interpreter = createKeywordInterpreter();
   const auditLog: (readonly string[])[] = [];
   const pages = createPageMounts(router, targets);
-  const normalize = createNormalizer(SPANISH_NORMALIZATION);
+  const normalize = createMatchKey(SPANISH_NORMALIZATION);
   const dependencies = { store, principal: () => principal, now: () => clock.now() };
 
   const service = createInterpretationService<PlaygroundPrincipal, PlaygroundRole>({

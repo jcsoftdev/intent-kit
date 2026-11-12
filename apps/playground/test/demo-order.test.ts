@@ -198,6 +198,20 @@ describe('ambiguity and typos', () => {
     expect(playground.store.orders(TENANT_ID).map(({ total }) => total)).toEqual([14]);
   });
 
+  it.each([
+    ['tres leches para la mesa 3', 14],
+    ['un tres leches para la mesa 3', 14],
+    ['pedido de un arroz con pollo para la mesa 3', 28],
+    ['dos arroz con pollo para la mesa 3', 56],
+  ])('orders %j for a total of %i', async (text, total) => {
+    const playground = createPlayground({ principal: waiter });
+
+    const state = await playground.session.submit({ text, source: 'text' });
+
+    completedResult(state);
+    expect(playground.store.orders(TENANT_ID).map((order) => order.total)).toEqual([total]);
+  });
+
   it('keeps a spoken quantity in front of a dish whose name starts with a number word', async () => {
     const playground = createPlayground({ principal: waiter });
 
