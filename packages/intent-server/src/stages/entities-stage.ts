@@ -93,6 +93,8 @@ type PathResult =
   | { readonly kind: 'skipped' }
   | { readonly kind: 'failed'; readonly outcome: Outcome<never> };
 
+type ResolvedPath = Extract<PathResult, { readonly kind: 'resolved' }>;
+
 interface ResolvedEntry {
   readonly path: string;
   readonly entity: string;
@@ -282,15 +284,20 @@ const ambiguityAt = (
   },
 });
 
-const splitDraftInput = (input: unknown, split: NumberSplit, result: PathResult): unknown =>
-  result.kind === 'resolved' && result.reading === 'counted' && result.answered === false
-    ? setAtPath(setAtPath(input, split.textPath, split.rest), split.numberPath, split.value)
-    : input;
+const decidedText = (split: NumberSplit, result: ResolvedPath): string => {
+  if (result.answered === true) {
+    return result.label;
+  }
+  return result.reading === 'counted' ? split.rest : split.whole;
+};
 
-const splitResolvedInput = (input: unknown, split: NumberSplit, result: PathResult): unknown =>
-  result.kind === 'resolved' && result.reading === 'counted'
-    ? setAtPath(input, split.numberPath, split.value)
-    : input;
+const splitDraftInput = (input: unknown, split: NumberSplit, result: ResolvedPath): unknown => {
+  const written = setAtPath(input, split.textPath, decidedText(split, result));
+  return result.reading === 'counted' ? setAtPath(written, split.numberPath, split.value) : written;
+};
+
+const splitResolvedInput = (input: unknown, split: NumberSplit, result: ResolvedPath): unknown =>
+  result.reading === 'counted' ? setAtPath(input, split.numberPath, split.value) : input;
 
 export const createEntitiesStage = <TPrincipal>(config: {
   readonly resolvers: ResolverRegistry<TPrincipal>;

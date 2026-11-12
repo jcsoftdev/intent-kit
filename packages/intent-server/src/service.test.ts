@@ -299,6 +299,11 @@ const TRES_LECHES_MENU: readonly EntityRecord[] = [
   { id: 'dish-arroz', label: 'Arroz con pollo' },
 ];
 
+const TWO_TRES_LECHES_MENU: readonly EntityRecord[] = [
+  { id: 'dish-tres-leches-clasico', label: 'Tres leches clásico' },
+  { id: 'dish-tres-leches-lucuma', label: 'Tres leches de lúcuma' },
+];
+
 const FOUR_CHEESE_MENU: readonly EntityRecord[] = [
   { id: 'dish-pizza-4-quesos', label: 'Pizza cuatro quesos' },
 ];
@@ -396,6 +401,13 @@ describe('interpretation service', () => {
 
   const linesOf = (outcome: Outcome<Interpretation>): unknown =>
     getAtPath(draftInputOf(outcome), 'lines');
+
+  const candidatePathsOf = (outcome: Outcome<Interpretation>): readonly string[] =>
+    outcome.ok && outcome.value.status === 'ambiguous'
+      ? outcome.value.candidates.flatMap((candidate) =>
+          candidate.kind === 'entity' ? [candidate.path] : [],
+        )
+      : [];
 
   const candidateIdsOf = (outcome: Outcome<Interpretation>): readonly string[] =>
     outcome.ok && outcome.value.status === 'ambiguous'
@@ -619,6 +631,106 @@ describe('interpretation service', () => {
       );
       expect(outcome).toMatchObject({ ok: true, value: { status: 'complete' } });
       expect(linesOf(outcome)).toEqual([{ offeringId: 'dish-arroz', quantity: 2 }]);
+    });
+
+    describe.each([
+      [
+        'dish-chicha',
+        'dos chicha para la mesa 3',
+        CHICHA_MENU,
+        { offeringId: 'Chicha', quantity: 2 },
+        { offeringId: 'dish-chicha', quantity: 2 },
+      ],
+      [
+        'dish-chicha-2l',
+        'dos chicha para la mesa 3',
+        CHICHA_MENU,
+        { offeringId: 'Chicha 2 litros' },
+        { offeringId: 'dish-chicha-2l' },
+      ],
+      [
+        'dish-chicha-2l',
+        'dos chicha para la mesa 3',
+        MORADA_MENU,
+        { offeringId: 'Chicha 2 litros', quantity: 2 },
+        { offeringId: 'dish-chicha-2l', quantity: 2 },
+      ],
+      [
+        'dish-tres-leches-clasico',
+        'tres leches para la mesa 3',
+        TWO_TRES_LECHES_MENU,
+        { offeringId: 'Tres leches clásico' },
+        { offeringId: 'dish-tres-leches-clasico' },
+      ],
+    ])('answering %s to "%s" and then the table', (dishId, text, menu, written, line) => {
+      const answeredDish = async () => {
+        const { service } = numbered(menu, { tables: [TERRACE_TABLE, HALL_TABLE] });
+        const asked = await service.interpret(waiter, utterance(text), { signal });
+        expect(asked).toMatchObject({ ok: true, value: { status: 'ambiguous' } });
+        expect(new Set(candidatePathsOf(asked))).toEqual(new Set(['lines[0].offeringId']));
+        const tableAsked = await service.interpret(
+          waiter,
+          continuation(draftInputOf(asked), { 'lines[0].offeringId': dishId }),
+          { signal },
+        );
+        return { service, tableAsked };
+      };
+
+      test('writes the chosen reading back into the draft', async () => {
+        const { tableAsked } = await answeredDish();
+        expect(tableAsked).toMatchObject({
+          ok: true,
+          value: { status: 'ambiguous', candidates: [{ path: 'tableId' }, { path: 'tableId' }] },
+        });
+        expect(linesOf(tableAsked)).toEqual([written]);
+      });
+
+      test.each([
+        ['only the table answer', {}],
+        ['every earlier answer', { 'lines[0].offeringId': dishId }],
+      ])('completes the same order when the client sends %s', async (_case, earlier) => {
+        const { service, tableAsked } = await answeredDish();
+        const outcome = await service.interpret(
+          waiter,
+          continuation(draftInputOf(tableAsked), { ...earlier, tableId: 'tbl-salon-3' }),
+          { signal },
+        );
+        expect(outcome).toMatchObject({ ok: true, value: { status: 'complete' } });
+        expect(linesOf(outcome)).toEqual([line]);
+      });
+    });
+
+    test('a forged written-back quantity is only a quantity the client could write anyway', async () => {
+      const { service } = numbered(CHICHA_MENU, { tables: [TERRACE_TABLE, HALL_TABLE] });
+      const complete = async (offeringId: string) =>
+        linesOf(
+          await service.interpret(
+            waiter,
+            continuation(
+              { tableId: '3', lines: [{ offeringId, quantity: 20 }] },
+              { tableId: 'tbl-salon-3' },
+            ),
+            { signal },
+          ),
+        );
+      expect(await complete('Chicha')).toEqual([{ offeringId: 'dish-chicha', quantity: 20 }]);
+      expect(await complete('chicha')).toEqual(await complete('Chicha'));
+    });
+
+    test('a forged written-back label must still match the answer sent with it', async () => {
+      const { service } = numbered(CHICHA_MENU);
+      const outcome = await service.interpret(
+        waiter,
+        continuation(
+          { tableId: '3', lines: [{ offeringId: 'Chicha 2 litros' }] },
+          { 'lines[0].offeringId': 'dish-chicha' },
+        ),
+        { signal },
+      );
+      expect(outcome).toEqual({
+        ok: false,
+        failure: { stage: 'resolution', code: 'INVALID_INPUT', retryable: false },
+      });
     });
 
     test.each(['leches', 'tres leches'])(
