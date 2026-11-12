@@ -4,11 +4,27 @@ export type SlotKind = 'text' | 'number';
 
 export type CapturedSlots = Readonly<Record<string, string>>;
 
+export interface SlotPair {
+  readonly numberSlot: string;
+  readonly textSlot: string;
+}
+
+export interface CapturedSplit {
+  readonly textSlot: string;
+  readonly whole: string;
+}
+
+export interface LeadingNumber {
+  readonly value: number;
+  readonly rest: string;
+}
+
 export interface CompiledPattern {
   readonly template: string;
   readonly slots: readonly string[];
+  readonly pairs: readonly SlotPair[];
   match(normalized: string): CapturedSlots | undefined;
-  alternatives(normalized: string): readonly CapturedSlots[];
+  splits(normalized: string): readonly CapturedSplit[];
 }
 
 type Element =
@@ -171,19 +187,33 @@ const assertSeparated = (
   });
 };
 
-const splittableNumberSlot = (
+const slotPairsOf = (
   elements: readonly Element[],
   kindOf: (slot: string) => SlotKind,
-): number => {
-  const first = elements.findIndex(
-    (element, position) =>
-      element.kind === 'slot' &&
-      element.optional &&
+): readonly SlotPair[] =>
+  elements.flatMap((element, position) => {
+    const next = elements[position + 1];
+    return element.kind === 'slot' &&
+      next?.kind === 'slot' &&
       kindOf(element.name) === 'number' &&
-      elements[position + 1]?.kind === 'slot' &&
-      kindOf((elements[position + 1] as Extract<Element, { kind: 'slot' }>).name) === 'text',
-  );
-  return first;
+      kindOf(next.name) === 'text'
+      ? [{ numberSlot: element.name, textSlot: next.name }]
+      : [];
+  });
+
+const numberValue = (raw: string, words: ReadonlyMap<string, number>): string =>
+  String(words.get(raw) ?? raw);
+
+export const splitLeadingNumber = (
+  text: string,
+  words: ReadonlyMap<string, number>,
+): LeadingNumber | undefined => {
+  const found = new RegExp(`^(${numberSource(words)}) (.+)$`, 'u').exec(foldText(text));
+  const raw = found?.[1];
+  const rest = found?.[2]?.trim();
+  return raw === undefined || rest === undefined || rest === ''
+    ? undefined
+    : { value: Number(numberValue(raw, words)), rest };
 };
 
 const convertNumbers = (
@@ -194,7 +224,7 @@ const convertNumbers = (
   Object.fromEntries(
     Object.entries(captured).map(([name, value]) => [
       name,
-      numberSlots.has(name) ? String(words.get(value) ?? value) : value,
+      numberSlots.has(name) ? numberValue(value, words) : value,
     ]),
   );
 
@@ -215,38 +245,40 @@ export const compilePattern = (
   ) {
     throw invalid(template);
   }
-  const numbers = numberSource(words);
+  const { source, groups } = assemble(elements, kindOf, numberSource(words));
+  const expression = new RegExp(`^${source}$`, 'u');
   const numberSlots = new Set(names.filter((name) => kindOf(name) === 'number'));
-  const runner = (parts: readonly Element[]) => {
-    const { source, groups } = assemble(parts, kindOf, numbers);
-    const expression = new RegExp(`^${source}$`, 'u');
-    return (normalized: string): CapturedSlots | undefined => {
-      const found = expression.exec(fold(normalized));
-      if (!found?.groups) {
-        return undefined;
-      }
-      const captured = [...groups].flatMap(([group, name]) => {
-        const value = found.groups?.[group];
-        return value === undefined ? [] : [[name, value] as const];
-      });
-      return captured.some(([, value]) => value.trim() === '')
-        ? undefined
-        : convertNumbers(Object.fromEntries(captured), numberSlots, words);
-    };
+  const pairs = slotPairsOf(elements, kindOf);
+  const capture = (normalized: string): CapturedSlots | undefined => {
+    const found = expression.exec(fold(normalized));
+    if (!found?.groups) {
+      return undefined;
+    }
+    const captured = [...groups].flatMap(([group, name]) => {
+      const value = found.groups?.[group];
+      return value === undefined ? [] : [[name, value] as const];
+    });
+    return captured.some(([, value]) => value.trim() === '')
+      ? undefined
+      : Object.fromEntries(captured);
   };
-  const primary = runner(elements);
-  const splitAt = splittableNumberSlot(elements, kindOf);
-  const split = splitAt < 0 ? undefined : runner(elements.filter((_, index) => index !== splitAt));
-  const splitName =
-    splitAt < 0 ? undefined : (elements[splitAt] as Extract<Element, { kind: 'slot' }>).name;
   return {
     template,
     slots: names,
-    match: primary,
-    alternatives(normalized) {
-      const first = primary(normalized);
-      const second = split?.(normalized);
-      return first && second && splitName !== undefined && splitName in first ? [second] : [];
+    pairs,
+    match(normalized) {
+      const captured = capture(normalized);
+      return captured && convertNumbers(captured, numberSlots, words);
+    },
+    splits(normalized) {
+      const captured = capture(normalized) ?? {};
+      return pairs.flatMap(({ numberSlot, textSlot }) => {
+        const number = captured[numberSlot];
+        const text = captured[textSlot];
+        return number === undefined || text === undefined
+          ? []
+          : [{ textSlot, whole: `${number} ${text}` }];
+      });
     },
   };
 };

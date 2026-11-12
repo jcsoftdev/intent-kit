@@ -1,6 +1,5 @@
 import {
   expandPattern,
-  foldText,
   getAtPath,
   matchesPattern,
   parsePath,
@@ -19,7 +18,8 @@ import type {
   Stage,
 } from '@jcsoftdev/intent-core';
 import { INTERPRETATION_STAGES } from '../state.js';
-import type { InterpretationState } from '../state.js';
+import type { InterpretationState, NumberSplit } from '../state.js';
+import { createMatchKey } from '../text/normalize.js';
 
 export type ResolverRegistry<TPrincipal> = ReadonlyMap<string, EntityResolver<TPrincipal>>;
 
@@ -82,7 +82,13 @@ export const withoutSegments = (value: unknown, segments: readonly PathSegment[]
 };
 
 type PathResult =
-  | { readonly kind: 'resolved'; readonly id: string; readonly label: string }
+  | {
+      readonly kind: 'resolved';
+      readonly id: string;
+      readonly label: string;
+      readonly reading?: SplitReading;
+      readonly answered?: boolean;
+    }
   | { readonly kind: 'ambiguous'; readonly options: readonly ClosedOption[] }
   | { readonly kind: 'skipped' }
   | { readonly kind: 'failed'; readonly outcome: Outcome<never> };
@@ -91,7 +97,20 @@ interface ResolvedEntry {
   readonly path: string;
   readonly entity: string;
   readonly id: string;
-  readonly exact: boolean;
+}
+
+type Lookup =
+  | { readonly kind: 'found'; readonly option: ClosedOption }
+  | { readonly kind: 'choices' | 'notFound'; readonly options: readonly ClosedOption[] }
+  | { readonly kind: 'failed'; readonly outcome: Outcome<never> };
+
+type SettledLookup = Exclude<Lookup, { readonly kind: 'failed' }>;
+
+type SplitReading = 'counted' | 'named';
+
+interface ReadingLookup {
+  readonly reading: SplitReading;
+  readonly lookup: SettledLookup;
 }
 
 const INVALID_RESULT: PathResult = { kind: 'failed', outcome: invalidInputInResolution };
@@ -100,87 +119,82 @@ const NOT_FOUND_RESULT: PathResult = {
   outcome: failureOutcome({ stage: 'resolution', code: 'ENTITY_NOT_FOUND', retryable: false }),
 };
 
-interface ResolvedReading {
-  readonly kind: 'resolved';
-  readonly reading: Draft;
-  readonly input: unknown;
-  readonly labels: Readonly<Record<string, string>>;
-  readonly resolved: readonly ResolvedEntry[];
-  readonly consumed: readonly string[];
-}
+const optionsOf = (lookup: SettledLookup): readonly ClosedOption[] =>
+  lookup.kind === 'found' ? [lookup.option] : lookup.options;
 
-type Reading =
-  ResolvedReading | { readonly kind: 'stopped'; readonly outcome: Outcome<Interpretation> };
+const hasCandidates = ({ lookup }: ReadingLookup): boolean => lookup.kind !== 'notFound';
 
-type Chosen =
-  | ResolvedReading
-  | { readonly kind: 'stopped'; readonly outcome: Outcome<Interpretation> }
-  | { readonly kind: 'ambiguous'; readonly outcome: Outcome<Interpretation> };
+const distinctById = (options: readonly ClosedOption[]): readonly ClosedOption[] =>
+  options.filter((option, index) => options.findIndex(({ id }) => id === option.id) === index);
 
-const signatureOf = (reading: ResolvedReading): string =>
-  JSON.stringify(reading.resolved.map(({ path, id }) => [path, id]));
-
-const firstDifferingPath = (readings: readonly ResolvedReading[]): string | undefined => {
-  const [first, ...others] = readings;
-  return first?.resolved
-    .map(({ path }) => path)
-    .find((path) =>
-      others.some(
-        (other) =>
-          other.resolved.find((entry) => entry.path === path)?.id !==
-          first.resolved.find((entry) => entry.path === path)?.id,
-      ),
-    );
+const offeredReadings = (readings: readonly ReadingLookup[]): readonly ReadingLookup[] => {
+  const withCandidates = readings.filter(hasCandidates);
+  return withCandidates.length > 0 ? withCandidates : readings;
 };
 
-const ambiguityBetween = (readings: readonly ResolvedReading[]): Chosen => {
-  const [first] = readings;
-  const path = firstDifferingPath(readings);
-  if (!first || path === undefined) {
-    return { kind: 'stopped', outcome: invalidInputInResolution };
-  }
-  const options = readings.flatMap((reading) => {
-    const id = reading.resolved.find((entry) => entry.path === path)?.id;
-    const label = reading.labels[path];
-    return id === undefined || label === undefined ? [] : [{ id, label }];
-  });
-  const unique = options.filter(
-    (option, index) => options.findIndex(({ id }) => id === option.id) === index,
+const offeredOptions = (readings: readonly ReadingLookup[]): readonly ClosedOption[] =>
+  distinctById(offeredReadings(readings).flatMap(({ lookup }) => optionsOf(lookup)));
+
+const labelContainsNumber = (
+  split: NumberSplit,
+  label: string,
+  keyOf: (text: string) => string,
+): boolean => keyOf(label).split(' ').includes(String(split.value));
+
+const readingForSharedOption = (
+  split: NumberSplit,
+  option: ClosedOption,
+  keyOf: (text: string) => string,
+): SplitReading => (labelContainsNumber(split, option.label, keyOf) ? 'named' : 'counted');
+
+const resolvedBy = (
+  reading: SplitReading,
+  option: ClosedOption,
+  answered: boolean,
+): PathResult => ({ kind: 'resolved', id: option.id, label: option.label, reading, answered });
+
+const answerAmongReadings = (
+  split: NumberSplit,
+  readings: readonly ReadingLookup[],
+  answer: string,
+  keyOf: (text: string) => string,
+): PathResult => {
+  const holders = offeredReadings(readings).filter(({ lookup }) =>
+    optionsOf(lookup).some(({ id }) => id === answer),
   );
-  return {
-    kind: 'ambiguous',
-    outcome: {
-      ok: true,
-      value: {
-        status: 'ambiguous',
-        draft: { ...first.reading, input: withoutSegments(first.reading.input, parsePath(path)) },
-        candidates: unique.map((option) => ({ kind: 'entity', path, option })),
-      },
-    },
-  };
+  const [first, ...others] = holders;
+  const option = first && optionsOf(first.lookup).find(({ id }) => id === answer);
+  if (!first || !option) {
+    return INVALID_RESULT;
+  }
+  const reading =
+    others.length === 0 ? first.reading : readingForSharedOption(split, option, keyOf);
+  return resolvedBy(reading, option, true);
 };
 
-const exactCount = (reading: ResolvedReading): number =>
-  reading.resolved.filter(({ exact }) => exact).length;
-
-const chooseReading = (readings: readonly Reading[]): Chosen => {
-  const [primary] = readings;
-  const resolved = readings.filter(
-    (reading): reading is ResolvedReading => reading.kind === 'resolved',
-  );
-  if (resolved.length === 0 || !primary) {
-    return primary?.kind === 'stopped'
-      ? primary
-      : { kind: 'stopped', outcome: invalidInputInResolution };
+const chooseAmongReadings = (
+  split: NumberSplit,
+  readings: readonly ReadingLookup[],
+  keyOf: (text: string) => string,
+): PathResult => {
+  const options = offeredOptions(readings);
+  const withCandidates = readings.filter(hasCandidates);
+  if (withCandidates.length === 0) {
+    return options.length > 0 ? { kind: 'ambiguous', options } : NOT_FOUND_RESULT;
   }
-  const signatures = new Set(resolved.map(signatureOf));
-  if (signatures.size > 1) {
-    return ambiguityBetween(resolved);
+  const allFound = withCandidates.every(({ lookup }) => lookup.kind === 'found');
+  const [first] = withCandidates;
+  const [only] = options;
+  if (first && only && allFound && options.length === 1) {
+    const reading =
+      withCandidates.length === 1 ? first.reading : readingForSharedOption(split, only, keyOf);
+    return resolvedBy(reading, only, false);
   }
-  return resolved.reduce((best, reading) =>
-    exactCount(reading) > exactCount(best) ? reading : best,
-  );
+  return { kind: 'ambiguous', options };
 };
+
+const withSplitUndone = (input: unknown, split: NumberSplit): unknown =>
+  setAtPath(withoutSegments(input, parsePath(split.numberPath)), split.textPath, split.whole);
 
 const parentOf = (path: string): string => /^(.*\])\.[^\]]*$/.exec(path)?.[1] ?? '';
 
@@ -219,135 +233,232 @@ const concretePathsOf = (
   return [...present, ...answered];
 };
 
+interface PathItem {
+  readonly path: string;
+  readonly param: EntityParam;
+  readonly split?: NumberSplit;
+}
+
+const pathItemsOf = (
+  params: readonly EntityParam[],
+  input: unknown,
+  answers: Answers,
+  splits: readonly NumberSplit[],
+): readonly PathItem[] =>
+  params.flatMap((param) =>
+    concretePathsOf(param, input, answers).map((path) => {
+      const split = splits.find(({ textPath }) => textPath === path);
+      return split ? { path, param, split } : { path, param };
+    }),
+  );
+
+interface PendingAmbiguity {
+  readonly path: string;
+  readonly options: readonly ClosedOption[];
+}
+
+const ambiguityAt = (
+  draft: Draft,
+  input: unknown,
+  { path, options }: PendingAmbiguity,
+): Outcome<Interpretation> => ({
+  ok: true,
+  value: {
+    status: 'ambiguous',
+    draft: { ...draft, input },
+    candidates: options.map((option) => ({ kind: 'entity', path, option })),
+  },
+});
+
+const splitDraftInput = (input: unknown, split: NumberSplit, result: PathResult): unknown =>
+  result.kind === 'resolved' && result.reading === 'counted' && result.answered === false
+    ? setAtPath(setAtPath(input, split.textPath, split.rest), split.numberPath, split.value)
+    : input;
+
+const splitResolvedInput = (input: unknown, split: NumberSplit, result: PathResult): unknown =>
+  result.kind === 'resolved' && result.reading === 'counted'
+    ? setAtPath(input, split.numberPath, split.value)
+    : input;
+
 export const createEntitiesStage = <TPrincipal>(config: {
   readonly resolvers: ResolverRegistry<TPrincipal>;
   readonly budgetMs: number;
   readonly matchKey?: (text: string) => string;
-}): Stage<InterpretationState<TPrincipal>, Interpretation> => ({
-  name: INTERPRETATION_STAGES.entities,
-  phase: 'resolution',
-  requires: ['catalog', 'principal', 'draft', 'answers'],
-  provides: ['resolvedInput', 'labels', 'answers', 'draft'],
-  budget: {
-    timeoutMs: config.budgetMs,
-    onTimeout: { stage: 'resolution', code: 'RESOLUTION_UNAVAILABLE', retryable: true },
-  },
-  async run(context, next) {
-    const draft = context.get('draft');
-    const answers = context.get('answers');
-    const principal = context.get('principal');
-    const entry = context.get('catalog').get(draft.capabilityId);
-    if (!entry) {
-      return capabilityNotFound;
-    }
-    if (!answersAreWellFormed(answers)) {
-      return invalidInputInResolution;
-    }
-    const resolveAt = async (
-      reading: Draft,
-      path: string,
-      param: EntityParam,
-      resolved: readonly ResolvedEntry[],
-    ): Promise<PathResult> => {
-      const text: unknown = getAtPath(reading.input, path);
-      const answer = answerTextOf(answers, path);
-      if (answer === null || (text !== undefined && typeof text !== 'string')) {
-        return INVALID_RESULT;
+}): Stage<InterpretationState<TPrincipal>, Interpretation> => {
+  const keyOf = config.matchKey ?? createMatchKey();
+  return {
+    name: INTERPRETATION_STAGES.entities,
+    phase: 'resolution',
+    requires: ['catalog', 'principal', 'draft', 'answers'],
+    provides: ['resolvedInput', 'labels', 'answers', 'draft'],
+    budget: {
+      timeoutMs: config.budgetMs,
+      onTimeout: { stage: 'resolution', code: 'RESOLUTION_UNAVAILABLE', retryable: true },
+    },
+    async run(context, next) {
+      const draft = context.get('draft');
+      const answers = context.get('answers');
+      const principal = context.get('principal');
+      const entry = context.get('catalog').get(draft.capabilityId);
+      if (!entry) {
+        return capabilityNotFound;
       }
-      const resolver = config.resolvers.get(param.entity);
-      if (!resolver) {
-        return { kind: 'failed', outcome: resolutionUnavailable(false) };
+      if (!answersAreWellFormed(answers)) {
+        return invalidInputInResolution;
       }
-      try {
-        if (text === undefined) {
-          return answer === undefined
-            ? { kind: 'skipped' }
-            : pickOption(
-                answer,
-                await resolver.options(principal, path, reading, { signal: context.signal }),
-              );
+      const splits = context.find('numberSplits') ?? [];
+      const lookUp = async (
+        resolver: EntityResolver<TPrincipal>,
+        text: string,
+        path: string,
+        param: EntityParam,
+        resolved: readonly ResolvedEntry[],
+      ): Promise<Lookup> => {
+        try {
+          const resolution = await resolver.resolve(
+            principal,
+            { text, hints: hintsFor(path, resolved), scope: param.scope ?? 'any' },
+            { signal: context.signal },
+          );
+          if (resolution.status === 'found') {
+            return { kind: 'found', option: { id: resolution.id, label: resolution.label } };
+          }
+          return resolution.status === 'choices'
+            ? { kind: 'choices', options: resolution.options }
+            : { kind: 'notFound', options: resolution.nearest };
+        } catch (error) {
+          return { kind: 'failed', outcome: unavailableUnlessAborted(context.signal, error) };
         }
-        const resolution = await resolver.resolve(
-          principal,
-          { text, hints: hintsFor(path, resolved), scope: param.scope ?? 'any' },
-          { signal: context.signal },
-        );
-        if (resolution.status === 'found') {
-          return answer === undefined || answer === resolution.id
-            ? { kind: 'resolved', id: resolution.id, label: resolution.label }
+      };
+      const resolveText = async (
+        resolver: EntityResolver<TPrincipal>,
+        text: string,
+        answer: string | undefined,
+        item: PathItem,
+        resolved: readonly ResolvedEntry[],
+      ): Promise<PathResult> => {
+        const lookup = await lookUp(resolver, text, item.path, item.param, resolved);
+        if (lookup.kind === 'failed') {
+          return lookup;
+        }
+        if (lookup.kind === 'found') {
+          return answer === undefined || answer === lookup.option.id
+            ? { kind: 'resolved', id: lookup.option.id, label: lookup.option.label }
             : INVALID_RESULT;
         }
-        const options = resolution.status === 'choices' ? resolution.options : resolution.nearest;
         if (answer !== undefined) {
-          return pickOption(answer, options);
+          return pickOption(answer, lookup.options);
         }
-        if (options.length > 0) {
-          return { kind: 'ambiguous', options };
+        return lookup.options.length > 0
+          ? { kind: 'ambiguous', options: lookup.options }
+          : NOT_FOUND_RESULT;
+      };
+      const resolveSplit = async (
+        resolver: EntityResolver<TPrincipal>,
+        split: NumberSplit,
+        answer: string | undefined,
+        item: PathItem,
+        resolved: readonly ResolvedEntry[],
+      ): Promise<PathResult> => {
+        const [byCount, byName] = await Promise.all([
+          lookUp(resolver, split.rest, item.path, item.param, resolved),
+          lookUp(resolver, split.whole, item.path, item.param, resolved),
+        ]);
+        if (byCount.kind === 'failed') {
+          return byCount;
         }
-        return NOT_FOUND_RESULT;
-      } catch (error) {
-        return { kind: 'failed', outcome: unavailableUnlessAborted(context.signal, error) };
-      }
-    };
-    const keyOf = config.matchKey ?? foldText;
-    const isExact = (text: unknown, label: string): boolean =>
-      typeof text === 'string' && keyOf(text) === keyOf(label);
-    const readInput = async (reading: Draft): Promise<Reading> => {
-      let input = reading.input;
+        if (byName.kind === 'failed') {
+          return byName;
+        }
+        const readings: readonly ReadingLookup[] = [
+          { reading: 'counted', lookup: byCount },
+          { reading: 'named', lookup: byName },
+        ];
+        return answer === undefined
+          ? chooseAmongReadings(split, readings, keyOf)
+          : answerAmongReadings(split, readings, answer, keyOf);
+      };
+      const resolveAt = async (
+        input: unknown,
+        item: PathItem,
+        resolved: readonly ResolvedEntry[],
+      ): Promise<PathResult> => {
+        const text: unknown = getAtPath(input, item.path);
+        const answer = answerTextOf(answers, item.path);
+        if (answer === null || (text !== undefined && typeof text !== 'string')) {
+          return INVALID_RESULT;
+        }
+        const resolver = config.resolvers.get(item.param.entity);
+        if (!resolver) {
+          return { kind: 'failed', outcome: resolutionUnavailable(false) };
+        }
+        if (text !== undefined) {
+          return item.split
+            ? resolveSplit(resolver, item.split, answer, item, resolved)
+            : resolveText(resolver, text, answer, item, resolved);
+        }
+        if (answer === undefined) {
+          return { kind: 'skipped' };
+        }
+        try {
+          return pickOption(
+            answer,
+            await resolver.options(
+              principal,
+              item.path,
+              { ...draft, input },
+              {
+                signal: context.signal,
+              },
+            ),
+          );
+        } catch (error) {
+          return { kind: 'failed', outcome: unavailableUnlessAborted(context.signal, error) };
+        }
+      };
+      const unsplit = splits.reduce(withSplitUndone, draft.input);
+      const items = pathItemsOf(entry.descriptor.entities, unsplit, answers, splits);
+      let draftInput = unsplit;
+      let input = unsplit;
+      let deferred: PendingAmbiguity | undefined;
       const labels: Record<string, string> = {};
       const resolved: ResolvedEntry[] = [];
       const consumed: string[] = [];
-      for (const param of entry.descriptor.entities) {
-        for (const path of concretePathsOf(param, reading.input, answers)) {
-          const result = await resolveAt(reading, path, param, resolved);
-          if (result.kind === 'failed') {
-            return { kind: 'stopped', outcome: result.outcome };
+      for (const [position, item] of items.entries()) {
+        const result = await resolveAt(unsplit, item, resolved);
+        if (result.kind === 'failed') {
+          return result.outcome;
+        }
+        if (result.kind === 'ambiguous') {
+          const current: PendingAmbiguity = { path: item.path, options: result.options };
+          if (item.split) {
+            return ambiguityAt(draft, draftInput, current);
           }
-          if (result.kind === 'ambiguous') {
-            return {
-              kind: 'stopped',
-              outcome: {
-                ok: true,
-                value: {
-                  status: 'ambiguous',
-                  draft: reading,
-                  candidates: result.options.map((option) => ({ kind: 'entity', path, option })),
-                },
-              },
-            };
+          deferred = deferred ?? current;
+          if (!items.slice(position + 1).some(({ split }) => split !== undefined)) {
+            return ambiguityAt(draft, draftInput, deferred);
           }
-          if (result.kind === 'resolved') {
-            input = setAtPath(input, path, result.id);
-            labels[path] = result.label;
-            resolved.push({
-              path,
-              entity: param.entity,
-              id: result.id,
-              exact: isExact(getAtPath(reading.input, path), result.label),
-            });
-            consumed.push(path);
+          continue;
+        }
+        if (result.kind === 'resolved') {
+          if (item.split) {
+            draftInput = splitDraftInput(draftInput, item.split, result);
+            input = splitResolvedInput(input, item.split, result);
           }
+          input = setAtPath(input, item.path, result.id);
+          labels[item.path] = result.label;
+          resolved.push({ path: item.path, entity: item.param.entity, id: result.id });
+          consumed.push(item.path);
         }
       }
-      return { kind: 'resolved', reading, input, labels, resolved, consumed };
-    };
-    const primary = await readInput(draft);
-    const alternatives = context.find('alternativeInputs') ?? [];
-    const readings = [
-      primary,
-      ...(await Promise.all(alternatives.map((input) => readInput({ ...draft, input })))),
-    ];
-    const chosen = chooseReading(readings);
-    if (chosen.kind === 'stopped') {
-      return chosen.outcome;
-    }
-    if (chosen.kind === 'ambiguous') {
-      return chosen.outcome;
-    }
-    context.set('draft', chosen.reading);
-    context.set('resolvedInput', chosen.input);
-    context.set('labels', chosen.labels);
-    context.set('answers', withoutAnswers(answers, chosen.consumed));
-    return next();
-  },
-});
+      if (deferred) {
+        return ambiguityAt(draft, draftInput, deferred);
+      }
+      context.set('draft', { ...draft, input: draftInput });
+      context.set('resolvedInput', input);
+      context.set('labels', labels);
+      context.set('answers', withoutAnswers(answers, consumed));
+      return next();
+    },
+  };
+};

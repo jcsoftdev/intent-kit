@@ -70,6 +70,8 @@ export const resolveSlotKey = (index: SlotIndex, key: string): SlotTarget | unde
 
 type SlotValue = Proposal['slots'][string];
 
+const SCALAR_POSITION = 0;
+
 const withIndices = (path: string, repeated: number): string => {
   const last = path.lastIndexOf(WILDCARD);
   return last === -1
@@ -77,11 +79,16 @@ const withIndices = (path: string, repeated: number): string => {
     : `${path.slice(0, last).replaceAll(WILDCARD, '[0]')}[${repeated}]${path.slice(last + WILDCARD.length)}`;
 };
 
+export const slotPathOf = (index: SlotIndex, key: string): string | undefined => {
+  const target = resolveSlotKey(index, key);
+  return target && withIndices(target.path, SCALAR_POSITION);
+};
+
 const scalarEntries = (
   target: SlotTarget,
   value: SlotValue,
 ): readonly (readonly [string, unknown])[] => {
-  const path = withIndices(target.path, 0);
+  const path = withIndices(target.path, SCALAR_POSITION);
   if (Array.isArray(value)) {
     const isRepeatable = target.kind === 'entity' && target.path.includes(WILDCARD);
     const isArrayLeaf = target.leafType === 'array';

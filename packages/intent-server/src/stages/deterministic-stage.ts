@@ -1,5 +1,6 @@
 import type { Interpretation, Proposal, Stage } from '@jcsoftdev/intent-core';
 import type { CatalogEntry, ServerCatalogView } from '../catalog/server-catalog.js';
+import type { CapturedSplit } from '../text/pattern.js';
 import { INTERPRETATION_STAGES } from '../state.js';
 import type { InterpretationState } from '../state.js';
 
@@ -7,7 +8,7 @@ const DETERMINISTIC_CONFIDENCE = 1;
 
 interface Match {
   readonly proposal: Proposal;
-  readonly alternatives: readonly Proposal['slots'][];
+  readonly splits: readonly CapturedSplit[];
 }
 
 const matchOf = (entry: CatalogEntry, normalized: string): Match | undefined => {
@@ -20,7 +21,7 @@ const matchOf = (entry: CatalogEntry, normalized: string): Match | undefined => 
           slots,
           confidence: DETERMINISTIC_CONFIDENCE,
         },
-        alternatives: pattern.alternatives(normalized),
+        splits: pattern.splits(normalized),
       };
     }
   }
@@ -40,7 +41,7 @@ export const createDeterministicStage = <TPrincipal>(): Stage<
   name: INTERPRETATION_STAGES.deterministic,
   phase: 'interpretation',
   requires: ['normalizedText', 'catalog'],
-  provides: ['proposal', 'origin', 'alternativeSlots'],
+  provides: ['proposal', 'origin', 'capturedSplits'],
   async run(context, next) {
     if (context.has('draft')) {
       return next();
@@ -54,7 +55,7 @@ export const createDeterministicStage = <TPrincipal>(): Stage<
     }
     if (others.length === 0) {
       context.set('proposal', only.proposal);
-      context.set('alternativeSlots', only.alternatives);
+      context.set('capturedSplits', only.splits);
       context.set('origin', 'deterministic');
       return next();
     }

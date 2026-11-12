@@ -106,6 +106,59 @@ const reservationsCreate = define({
   roles: ['waiter'],
 });
 
+const orderLines = (quantity: z.ZodType<number | undefined>) =>
+  z.array(z.object({ offeringId: z.string(), quantity })).min(1);
+
+const ordersAdd = define({
+  ...base,
+  id: 'orders.add',
+  description: 'Add to an order',
+  patterns: [
+    'agrega {quantity} {dish} a la mesa {table}',
+    'suma {dish} {quantity?} a la mesa {table}',
+  ],
+  input: z.object({ tableId: z.string(), lines: orderLines(z.number().int()) }),
+  entities: [
+    { path: 'lines[].offeringId', entity: 'dish' },
+    { path: 'tableId', entity: 'table' },
+  ],
+  roles: ['waiter'],
+});
+
+const comboCreate = define({
+  ...base,
+  id: 'orders.combo',
+  description: 'Order a dish with a side',
+  patterns: ['{quantity?} {dish} y {quantity2?} {side}'],
+  input: z.object({
+    dishId: z.string(),
+    quantity: z.number().int().optional(),
+    sideId: z.string(),
+    quantity2: z.number().int().optional(),
+  }),
+  entities: [
+    { path: 'dishId', entity: 'dish' },
+    { path: 'sideId', entity: 'side' },
+  ],
+  roles: ['waiter'],
+});
+
+const tableFirstOrder = define({
+  ...base,
+  id: 'orders.tableFirst',
+  description: 'Create an order',
+  patterns: ['{quantity?} {dish} para la mesa {table}'],
+  input: z.object({
+    tableId: z.string(),
+    lines: orderLines(z.number().int().optional()),
+  }),
+  entities: [
+    { path: 'tableId', entity: 'table' },
+    { path: 'lines[].offeringId', entity: 'dish' },
+  ],
+  roles: ['waiter'],
+});
+
 const auditExport = define({
   ...base,
   id: 'audit.export',
@@ -174,6 +227,9 @@ const noInterpretation = (): InterpreterResult => ({ status: 'unsupported' });
 
 const matchKey = createMatchKey();
 
+const closedOptionOf = ({ id, label, detail }: EntityRecord): ClosedOption =>
+  detail === undefined ? { id, label } : { id, label, detail };
+
 const kitResolver = (
   entity: string,
   records: readonly EntityRecord[],
@@ -181,14 +237,31 @@ const kitResolver = (
   entity,
   async resolve(_principal, { text }) {
     const match = matchClosedOption(text, records, matchKey);
-    return match
-      ? { status: 'found', id: match.id, label: match.label }
+    if (match) {
+      return { status: 'found', id: match.id, label: match.label };
+    }
+    const mentioned = records.filter(
+      (record) => matchClosedOption(text, [record], matchKey) !== undefined,
+    );
+    return mentioned.length > 0
+      ? { status: 'choices', options: mentioned.map(closedOptionOf) }
       : { status: 'notFound', nearest: [] };
   },
   async options() {
-    return records;
+    return records.map(closedOptionOf);
   },
 });
+
+const fakeResolver = (
+  entity: string,
+  records: readonly EntityRecord[],
+): EntityResolver<Principal> =>
+  createInMemoryEntityResolver<Principal>({
+    entity,
+    records: () => records,
+    normalize: matchKey,
+    options: () => records.map(closedOptionOf),
+  });
 
 const RESERVATION_TABLES: readonly EntityRecord[] = [
   { id: 'tbl-terraza', label: 'Terraza' },
@@ -205,6 +278,40 @@ const PIZZA_MENU: readonly EntityRecord[] = [
   { id: 'dish-pizza-4', label: 'Pizza cuatro estaciones' },
 ];
 
+const MORADA_MENU: readonly EntityRecord[] = [
+  { id: 'dish-chicha-morada', label: 'Chicha morada' },
+  { id: 'dish-chicha-2l', label: 'Chicha 2 litros' },
+];
+
+const CEVICHE_MENU: readonly EntityRecord[] = [
+  { id: 'dish-ceviche', label: 'Ceviche' },
+  { id: 'dish-tres-leches-clasico', label: 'Tres leches clásico' },
+];
+
+const ONLY_CHICHA_MENU: readonly EntityRecord[] = [{ id: 'dish-chicha', label: 'Chicha' }];
+
+const TRES_LECHES_MENU: readonly EntityRecord[] = [
+  { id: 'dish-tres-leches-clasico', label: 'Tres leches clásico' },
+  { id: 'dish-arroz', label: 'Arroz con pollo' },
+];
+
+const FOUR_CHEESE_MENU: readonly EntityRecord[] = [
+  { id: 'dish-pizza-4-quesos', label: 'Pizza cuatro quesos' },
+];
+
+const failingOn = (
+  text: string,
+  resolver: EntityResolver<Principal>,
+): EntityResolver<Principal> => ({
+  ...resolver,
+  async resolve(principal, query, options) {
+    if (matchKey(query.text) === matchKey(text)) {
+      throw new Error('resolver unavailable');
+    }
+    return resolver.resolve(principal, query, options);
+  },
+});
+
 const harness = (
   options: {
     readonly dishes?: readonly EntityRecord[];
@@ -212,6 +319,8 @@ const harness = (
     readonly tables?: readonly EntityRecord[];
     readonly tableResolver?: EntityResolver<Principal>;
     readonly dishDelayMs?: number;
+    readonly capabilities?: readonly AnyDescriptor[];
+    readonly extraResolvers?: readonly EntityResolver<Principal>[];
     readonly script?: () => InterpreterResult;
     readonly customize?: Parameters<
       typeof createInterpretationService<Principal, Role>
@@ -231,10 +340,11 @@ const harness = (
       options: () => tables.map(({ id, label, detail }) => ({ id, label, detail })),
     });
   const service = createInterpretationService<Principal, Role>({
-    capabilities: descriptors,
+    capabilities: options.capabilities ?? descriptors,
     schema: createZodSchemaAdapter(),
     rolesOf: (principal) => principal,
     resolvers: [
+      ...(options.extraResolvers ?? []),
       options.dishResolver ??
         createInMemoryEntityResolver<Principal>({
           entity: 'dish',
@@ -291,11 +401,31 @@ describe('interpretation service', () => {
       : [];
 
   describe.each([
-    ['the strict fake resolver', undefined],
-    ['a resolver built from matchClosedOption', 'kit'],
-  ] as const)('number words with %s', (_name, kind) => {
-    const resolverFor = (records: readonly EntityRecord[]) =>
-      kind === 'kit' ? { dishResolver: kitResolver('dish', records) } : {};
+    ['the strict fake resolver', fakeResolver],
+    ['a resolver built from matchClosedOption and createMatchKey', kitResolver],
+  ] as const)('a leading number word with %s', (_name, resolverOf) => {
+    const numbered = (
+      dishes: readonly EntityRecord[],
+      options: {
+        readonly tables?: readonly EntityRecord[];
+        readonly capabilities?: readonly AnyDescriptor[];
+        readonly dishResolver?: EntityResolver<Principal>;
+        readonly script?: () => InterpreterResult;
+      } = {},
+    ) =>
+      harness({
+        dishResolver: options.dishResolver ?? resolverOf('dish', dishes),
+        tableResolver: resolverOf('table', options.tables ?? [TERRACE_TABLE]),
+        extraResolvers: [resolverOf('side', dishes)],
+        ...(options.capabilities ? { capabilities: options.capabilities } : {}),
+        ...(options.script ? { script: options.script } : {}),
+      });
+
+    const interpretText = (
+      text: string,
+      dishes: readonly EntityRecord[],
+      options?: Parameters<typeof numbered>[1],
+    ) => numbered(dishes, options).service.interpret(waiter, utterance(text), { signal });
 
     test.each([
       ['un tres leches para la mesa 3', { offeringId: 'dish-tres-leches', quantity: 1 }],
@@ -307,64 +437,294 @@ describe('interpretation service', () => {
       ['dos arroz con pollo para la mesa tres', { offeringId: 'dish-arroz', quantity: 2 }],
       ['pedido de un arroz con pollo para la mesa 3', { offeringId: 'dish-arroz' }],
     ])('%s', async (text, line) => {
-      const { service } = harness(resolverFor(DISH_RECORDS));
-      const outcome = await service.interpret(waiter, utterance(text), { signal });
+      const outcome = await interpretText(text, DISH_RECORDS);
       expect(outcome).toMatchObject({ ok: true, value: { status: 'complete' } });
       expect(linesOf(outcome)).toEqual([line]);
     });
-  });
 
-  test.each([
-    ['dos chicha para la mesa 3', CHICHA_MENU],
-    ['cuatro pizza para la mesa 3', PIZZA_MENU],
-  ])('%s is ambiguous and never silently the longer dish', async (text, menu) => {
-    const { service } = harness({ dishes: menu });
-    const outcome = await service.interpret(waiter, utterance(text), { signal });
-    expect(outcome).toMatchObject({ ok: true, value: { status: 'ambiguous' } });
-    expect([...candidateIdsOf(outcome)].sort()).toEqual(menu.map(({ id }) => id).sort());
-  });
-
-  test('picking an option after the number-word ambiguity completes with that dish', async () => {
-    const { service } = harness({ dishes: CHICHA_MENU });
-    const asked = await service.interpret(waiter, utterance('dos chicha para la mesa 3'), {
-      signal,
+    test.each([
+      ['tres leches para la mesa 3', TRES_LECHES_MENU, { offeringId: 'dish-tres-leches-clasico' }],
+      ['cuatro quesos para la mesa 3', FOUR_CHEESE_MENU, { offeringId: 'dish-pizza-4-quesos' }],
+      [
+        'dos pizza cuatro quesos para la mesa 3',
+        FOUR_CHEESE_MENU,
+        { offeringId: 'dish-pizza-4-quesos', quantity: 2 },
+      ],
+    ])('%s keeps the number word that the dish name contains', async (text, menu, line) => {
+      const outcome = await interpretText(text, menu);
+      expect(outcome).toMatchObject({ ok: true, value: { status: 'complete' } });
+      expect(linesOf(outcome)).toEqual([line]);
     });
-    const outcome = await service.interpret(
-      waiter,
-      continuation(draftInputOf(asked), { 'lines[0].offeringId': 'dish-chicha-2l' }),
-      { signal },
-    );
-    expect(outcome).toMatchObject({ ok: true, value: { status: 'complete' } });
-  });
 
-  test('a quantity from the interpreter is never re-parsed against the dish name', async () => {
-    const { service } = harness({
-      dishes: CHICHA_MENU,
-      script: () => ({
-        status: 'proposed',
-        proposals: [
-          {
-            capabilityId: 'orders.create',
-            slots: { dish: 'chicha', quantity: 2, table: '3' },
-            confidence: 0.9,
-          },
-        ],
-      }),
+    test.each([
+      ['dos chicha para la mesa 3', CHICHA_MENU, 'dos chicha'],
+      ['dos chicha para la mesa 3', MORADA_MENU, 'dos chicha'],
+      ['cuatro pizza para la mesa 3', PIZZA_MENU, 'cuatro pizza'],
+    ])('%s is ambiguous and the draft keeps the unsplit text', async (text, menu, unsplit) => {
+      const outcome = await interpretText(text, menu);
+      expect(outcome).toMatchObject({ ok: true, value: { status: 'ambiguous' } });
+      expect([...candidateIdsOf(outcome)].sort()).toEqual(menu.map(({ id }) => id).sort());
+      expect(linesOf(outcome)).toEqual([{ offeringId: unsplit }]);
     });
-    const outcome = await service.interpret(waiter, utterance('quiero algo rico'), { signal });
-    expect(linesOf(outcome)).toEqual([{ offeringId: 'dish-chicha', quantity: 2 }]);
-  });
 
-  test('a top-level entity is never glued to a number', async () => {
-    const { service } = harness({ tables: RESERVATION_TABLES });
-    const outcome = await service.interpret(
-      waiter,
-      utterance('reserva terraza para cuatro personas'),
-      { signal },
+    test.each([
+      ['dish-chicha-2l', CHICHA_MENU, { offeringId: 'dish-chicha-2l' }],
+      ['dish-chicha', CHICHA_MENU, { offeringId: 'dish-chicha', quantity: 2 }],
+      ['dish-chicha-2l', MORADA_MENU, { offeringId: 'dish-chicha-2l' }],
+      ['dish-chicha-morada', MORADA_MENU, { offeringId: 'dish-chicha-morada', quantity: 2 }],
+    ])(
+      'after "dos chicha", answering %s (menu %#) applies only that reading',
+      async (id, menu, line) => {
+        const { service } = numbered(menu);
+        const asked = await service.interpret(waiter, utterance('dos chicha para la mesa 3'), {
+          signal,
+        });
+        expect(asked).toMatchObject({ ok: true, value: { status: 'ambiguous' } });
+        const outcome = await service.interpret(
+          waiter,
+          continuation(draftInputOf(asked), { 'lines[0].offeringId': id }),
+          { signal },
+        );
+        expect(outcome).toMatchObject({ ok: true, value: { status: 'complete' } });
+        expect(linesOf(outcome)).toEqual([line]);
+      },
     );
-    expect(outcome).toMatchObject({
-      ok: true,
-      value: { status: 'complete', draft: { input: { tableId: 'tbl-terraza', quantity: 4 } } },
+
+    test('after "dos chicha", an id outside both readings is INVALID_INPUT', async () => {
+      const { service } = numbered([...CHICHA_MENU, ...DISH_RECORDS]);
+      const asked = await service.interpret(waiter, utterance('dos chicha para la mesa 3'), {
+        signal,
+      });
+      expect(asked).toMatchObject({ ok: true, value: { status: 'ambiguous' } });
+      const outcome = await service.interpret(
+        waiter,
+        continuation(draftInputOf(asked), { 'lines[0].offeringId': 'dish-arroz' }),
+        { signal },
+      );
+      expect(outcome).toEqual({
+        ok: false,
+        failure: { stage: 'resolution', code: 'INVALID_INPUT', retryable: false },
+      });
+    });
+
+    test('a required quantity splits too and is asked instead of 3 × leches', async () => {
+      const outcome = await interpretText('agrega tres leches a la mesa 3', DISH_RECORDS, {
+        capabilities: [ordersAdd],
+      });
+      expect(outcome).toMatchObject({
+        ok: true,
+        value: {
+          status: 'incomplete',
+          draft: { input: { lines: [{ offeringId: 'tres leches' }] } },
+          missing: [{ path: 'lines[0].quantity' }],
+        },
+      });
+      expect(linesOf(outcome)).toEqual([{ offeringId: 'tres leches' }]);
+    });
+
+    test('each number-before-text pair of a pattern splits on its own', async () => {
+      const outcome = await interpretText('dos arroz y tres leches', DISH_RECORDS, {
+        capabilities: [comboCreate],
+      });
+      expect(outcome).toMatchObject({
+        ok: true,
+        value: {
+          status: 'complete',
+          draft: { input: { dishId: 'dish-arroz', quantity: 2, sideId: 'dish-tres-leches' } },
+        },
+      });
+      expect(getAtPath(draftInputOf(outcome), 'quantity2')).toBeUndefined();
+    });
+
+    test('two ambiguous pairs are asked one after the other and each answer keeps its reading', async () => {
+      const { service } = numbered(CHICHA_MENU, { capabilities: [comboCreate] });
+      const first = await service.interpret(waiter, utterance('dos chicha y dos chicha'), {
+        signal,
+      });
+      expect(first).toMatchObject({
+        ok: true,
+        value: { status: 'ambiguous', candidates: [{ path: 'dishId' }, { path: 'dishId' }] },
+      });
+      const second = await service.interpret(
+        waiter,
+        continuation(draftInputOf(first), { dishId: 'dish-chicha' }, 'orders.combo'),
+        { signal },
+      );
+      expect(second).toMatchObject({
+        ok: true,
+        value: { status: 'ambiguous', candidates: [{ path: 'sideId' }, { path: 'sideId' }] },
+      });
+      const third = await service.interpret(
+        waiter,
+        continuation(
+          draftInputOf(second),
+          { dishId: 'dish-chicha', sideId: 'dish-chicha-2l' },
+          'orders.combo',
+        ),
+        { signal },
+      );
+      expect(third).toMatchObject({
+        ok: true,
+        value: {
+          status: 'complete',
+          draft: { input: { dishId: 'dish-chicha', quantity: 2, sideId: 'dish-chicha-2l' } },
+        },
+      });
+      expect(getAtPath(draftInputOf(third), 'quantity2')).toBeUndefined();
+    });
+
+    test('a table asked first never leaves the quantity of a decided split behind', async () => {
+      const { service } = numbered(DISH_RECORDS, {
+        tables: [TERRACE_TABLE, HALL_TABLE],
+        capabilities: [tableFirstOrder],
+      });
+      const asked = await service.interpret(
+        waiter,
+        utterance('dos arroz con pollo para la mesa 3'),
+        { signal },
+      );
+      expect(asked).toMatchObject({
+        ok: true,
+        value: { status: 'ambiguous', candidates: [{ path: 'tableId' }, { path: 'tableId' }] },
+      });
+      const outcome = await service.interpret(
+        waiter,
+        continuation(draftInputOf(asked), { tableId: 'tbl-salon-3' }, 'orders.tableFirst'),
+        { signal },
+      );
+      expect(outcome).toMatchObject({ ok: true, value: { status: 'complete' } });
+      expect(linesOf(outcome)).toEqual([{ offeringId: 'dish-arroz', quantity: 2 }]);
+    });
+
+    test.each(['leches', 'tres leches'])(
+      'a resolver error on the reading "%s" fails the interpretation',
+      async (failing) => {
+        const outcome = await interpretText('tres leches para la mesa 3', DISH_RECORDS, {
+          dishResolver: failingOn(failing, resolverOf('dish', DISH_RECORDS)),
+        });
+        expect(outcome).toEqual({
+          ok: false,
+          failure: { stage: 'resolution', code: 'RESOLUTION_UNAVAILABLE', retryable: true },
+        });
+      },
+    );
+
+    test('a quantity from the interpreter is never re-parsed against the dish name', async () => {
+      const outcome = await interpretText('quiero algo rico', CHICHA_MENU, {
+        script: () => ({
+          status: 'proposed',
+          proposals: [
+            {
+              capabilityId: 'orders.create',
+              slots: { dish: 'chicha', quantity: 2, table: '3' },
+              confidence: 0.9,
+            },
+          ],
+        }),
+      });
+      expect(linesOf(outcome)).toEqual([{ offeringId: 'dish-chicha', quantity: 2 }]);
+    });
+
+    const wholeTextOutcome =
+      resolverOf === fakeResolver
+        ? { status: 'ambiguous', lines: [{ offeringId: 'dos chicha' }] }
+        : { status: 'complete', lines: [{ offeringId: 'dish-chicha' }] };
+
+    test('interpreter text with a leading number word is resolved whole, never split', async () => {
+      const outcome = await interpretText('quiero algo rico', ONLY_CHICHA_MENU, {
+        script: () => ({
+          status: 'proposed',
+          proposals: [
+            {
+              capabilityId: 'orders.create',
+              slots: { dish: 'dos chicha', table: '3' },
+              confidence: 0.9,
+            },
+          ],
+        }),
+      });
+      expect(outcome).toMatchObject({ ok: true, value: { status: wholeTextOutcome.status } });
+      expect(linesOf(outcome)).toEqual(wholeTextOutcome.lines);
+    });
+
+    test.each([
+      ['no answer', {}],
+      ['an answer on another path', { tableId: 'tbl-terraza-3' }],
+    ])('a continuation draft with %s is never split', async (_case, answers) => {
+      const { service } = numbered(ONLY_CHICHA_MENU);
+      const outcome = await service.interpret(
+        waiter,
+        continuation({ tableId: '3', lines: [{ offeringId: 'dos chicha' }] }, answers),
+        { signal },
+      );
+      expect(outcome).toMatchObject({ ok: true, value: { status: wholeTextOutcome.status } });
+      expect(linesOf(outcome)).toEqual(wholeTextOutcome.lines);
+    });
+
+    test('a continuation that already carries a quantity is never re-derived', async () => {
+      const { service } = numbered(ONLY_CHICHA_MENU);
+      const outcome = await service.interpret(
+        waiter,
+        continuation(
+          { tableId: '3', lines: [{ offeringId: 'dos chicha', quantity: 5 }] },
+          { 'lines[0].offeringId': 'dish-chicha' },
+        ),
+        { signal },
+      );
+      expect(linesOf(outcome)).toEqual([{ offeringId: 'dish-chicha', quantity: 5 }]);
+    });
+
+    test.each([
+      ['una chicha para la mesa 3', CHICHA_MENU, [ordersCreate], { offeringId: 'dish-chicha' }],
+      [
+        'suma tres leches dos a la mesa 3',
+        DISH_RECORDS,
+        [ordersAdd],
+        { offeringId: 'dish-tres-leches', quantity: 2 },
+      ],
+      [
+        'dos ceviche para la mesa 3',
+        CEVICHE_MENU,
+        [ordersCreate],
+        { offeringId: 'dish-ceviche', quantity: 2 },
+      ],
+      [
+        'tres leches clasico para la mesa 3',
+        TRES_LECHES_MENU,
+        [ordersCreate],
+        { offeringId: 'dish-tres-leches-clasico' },
+      ],
+      [
+        'una pizza cuatro quesos para la mesa 3',
+        FOUR_CHEESE_MENU,
+        [ordersCreate],
+        { offeringId: 'dish-pizza-4-quesos' },
+      ],
+    ])('review probe %s', async (text, menu, capabilities, line) => {
+      const outcome = await interpretText(text, menu, { capabilities });
+      expect(outcome).toMatchObject({ ok: true, value: { status: 'complete' } });
+      expect(linesOf(outcome)).toEqual([line]);
+    });
+
+    test('review probe "agrega dos chicha a la mesa 3" is ambiguous', async () => {
+      const outcome = await interpretText('agrega dos chicha a la mesa 3', CHICHA_MENU, {
+        capabilities: [ordersAdd],
+      });
+      expect(outcome).toMatchObject({ ok: true, value: { status: 'ambiguous' } });
+      expect([...candidateIdsOf(outcome)].sort()).toEqual(['dish-chicha', 'dish-chicha-2l']);
+    });
+
+    test('a number after the entity text is never glued to it', async () => {
+      for (const [text, tableId] of [
+        ['reserva terraza para cuatro personas', 'tbl-terraza'],
+        ['reserva terraza 4 para cuatro personas', 'tbl-terraza-4'],
+      ] as const) {
+        const outcome = await interpretText(text, DISH_RECORDS, { tables: RESERVATION_TABLES });
+        expect(outcome).toMatchObject({
+          ok: true,
+          value: { status: 'complete', draft: { input: { tableId, quantity: 4 } } },
+        });
+      }
     });
   });
 

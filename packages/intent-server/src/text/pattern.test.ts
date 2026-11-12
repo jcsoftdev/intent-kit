@@ -1,7 +1,7 @@
 import { IntentDefinitionError, foldText } from '@jcsoftdev/intent-core';
 import { describe, expect, test } from 'vitest';
 import { createNormalizer } from './normalize.js';
-import { compilePattern } from './pattern.js';
+import { compilePattern, splitLeadingNumber } from './pattern.js';
 import type { SlotKind } from './pattern.js';
 
 const kindOf = (slot: string): SlotKind => (slot === 'quantity' ? 'number' : 'text');
@@ -113,14 +113,38 @@ describe('compilePattern', () => {
       });
     });
 
-    test('a captured quantity also yields the reading where the dish text keeps it', () => {
-      expect(counted.alternatives('tres leches para la mesa 3')).toEqual([
-        { dish: 'tres leches', table: '3' },
+    test('a captured quantity also yields the unsplit text of the slot it precedes', () => {
+      expect(counted.pairs).toEqual([{ numberSlot: 'quantity', textSlot: 'dish' }]);
+      expect(counted.splits('tres leches para la mesa 3')).toEqual([
+        { textSlot: 'dish', whole: 'tres leches' },
       ]);
-      expect(counted.alternatives('leches para la mesa 3')).toEqual([]);
+      expect(counted.splits('leches para la mesa 3')).toEqual([]);
     });
 
-    test('a quantity that does not precede a text slot has no alternative', () => {
+    test('a required quantity and every number-before-text pair split too', () => {
+      const pairs = compilePattern(
+        'agrega {quantity} {dish} y {quantity2?} {side}',
+        (slot) => (slot.startsWith('quantity') ? 'number' : 'text'),
+        foldText,
+        words,
+      );
+      expect(pairs.splits('agrega dos arroz y tres leches')).toEqual([
+        { textSlot: 'dish', whole: 'dos arroz' },
+        { textSlot: 'side', whole: 'tres leches' },
+      ]);
+      expect(pairs.splits('agrega dos arroz y leches')).toEqual([
+        { textSlot: 'dish', whole: 'dos arroz' },
+      ]);
+    });
+
+    test('a leading number splits off digits or a number word and keeps the rest', () => {
+      expect(splitLeadingNumber('tres leches', words)).toEqual({ value: 3, rest: 'leches' });
+      expect(splitLeadingNumber('12 chicha', words)).toEqual({ value: 12, rest: 'chicha' });
+      expect(splitLeadingNumber('leches', words)).toBeUndefined();
+      expect(splitLeadingNumber('tres', words)).toBeUndefined();
+    });
+
+    test('a quantity that does not precede a text slot has no split', () => {
       const reserve = compilePattern(
         'reserva {table} para {quantity} personas',
         (slot) => (slot === 'quantity' ? 'number' : 'text'),
@@ -131,7 +155,8 @@ describe('compilePattern', () => {
         table: 'terraza',
         quantity: '3',
       });
-      expect(reserve.alternatives('reserva terraza para tres personas')).toEqual([]);
+      expect(reserve.pairs).toEqual([]);
+      expect(reserve.splits('reserva terraza para tres personas')).toEqual([]);
     });
   });
 });

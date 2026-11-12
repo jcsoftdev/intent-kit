@@ -140,6 +140,25 @@ describe('createServerCatalog', () => {
     expect(message()).toContain('at most 2 text slots');
   });
 
+  test('pairs each number slot with the entity text slot right after it', () => {
+    const entry = catalogOf(allDescriptors).entries.get('orders.create');
+    expect([...(entry?.numberSplits ?? [])]).toEqual([['dishId', 'quantity']]);
+  });
+
+  test('rejects an entity text slot that follows different number slots across patterns', () => {
+    const twoCounts = {
+      ...ordersCreate,
+      patterns: ['{quantity?} {dish} para la mesa {table}', 'son {portions} {dish} a la {table}'],
+      input: z.object({
+        tableId: z.uuid(),
+        dishId: z.uuid(),
+        quantity: z.number().int().optional(),
+        portions: z.number().int().optional(),
+      }),
+    };
+    expect(reasonOf(() => catalogOf([twoCounts]))).toBe('INVALID_PATTERN');
+  });
+
   test('rejects an id-shaped leaf that is not declared as an entity path', () => {
     const uuidLeaf = {
       ...cashShiftClose,

@@ -127,6 +127,7 @@ export function createInterpretationService<TPrincipal, TRole extends string>(
   const budgets = { ...DEFAULT_INTERPRETATION_BUDGETS, ...config.budgets };
   const events = config.events ?? noopEventBus;
   const normalize = createNormalizer(config.normalization);
+  const numberWords = numberWordsOf(config.normalization);
   const resolvers = byEntity(config.resolvers);
   const probes = new Map((config.probes ?? []).map((probe) => [probe.capabilityId, probe]));
   const catalog = createServerCatalog({
@@ -137,7 +138,7 @@ export function createInterpretationService<TPrincipal, TRole extends string>(
       (config.probes ?? []).map((probe) => [probe.capabilityId, probe.paths]),
     ),
     normalize,
-    numberWords: numberWordsOf(config.normalization),
+    numberWords,
   });
   const base = createPipelineBuilder<InterpretationState<TPrincipal>, Interpretation>({
     name: PIPELINE_NAME,
@@ -156,7 +157,7 @@ export function createInterpretationService<TPrincipal, TRole extends string>(
         budgetMs: budgets.interpretMs,
       }),
     )
-    .use(createDraftStage(copy))
+    .use(createDraftStage(copy, numberWords))
     .use(
       createEntitiesStage({
         resolvers,

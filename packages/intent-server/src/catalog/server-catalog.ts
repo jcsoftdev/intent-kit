@@ -16,7 +16,7 @@ import type {
 } from '@jcsoftdev/intent-core';
 import { compilePattern } from '../text/pattern.js';
 import type { CompiledPattern, SlotKind } from '../text/pattern.js';
-import { ambiguousSlotKeys, buildSlotIndex, resolveSlotKey } from '../text/slots.js';
+import { ambiguousSlotKeys, buildSlotIndex, resolveSlotKey, slotPathOf } from '../text/slots.js';
 import type { SlotIndex } from '../text/slots.js';
 
 export interface CatalogEntry {
@@ -26,6 +26,7 @@ export interface CatalogEntry {
   readonly slots: SlotIndex;
   readonly requirementPaths: readonly string[];
   readonly patterns: readonly CompiledPattern[];
+  readonly numberSplits: ReadonlyMap<string, string>;
 }
 
 export interface ServerCatalogView {
@@ -261,6 +262,32 @@ const compilePatterns = (
   );
 };
 
+const numberSplitsOf = (
+  descriptor: AnyDescriptor,
+  patterns: readonly CompiledPattern[],
+  slots: SlotIndex,
+): ReadonlyMap<string, string> => {
+  const splits = new Map<string, string>();
+  for (const { numberSlot, textSlot } of patterns.flatMap(({ pairs }) => pairs)) {
+    const textPath = slotPathOf(slots, textSlot);
+    const numberPath = slotPathOf(slots, numberSlot);
+    const isEntityAfterValue =
+      resolveSlotKey(slots, textSlot)?.kind === 'entity' &&
+      resolveSlotKey(slots, numberSlot)?.kind === 'value';
+    if (textPath === undefined || numberPath === undefined || !isEntityAfterValue) {
+      continue;
+    }
+    if ((splits.get(textPath) ?? numberPath) !== numberPath) {
+      throw new IntentDefinitionError(
+        'INVALID_PATTERN',
+        `${descriptor.id}: {${textSlot}} follows a different number slot in another pattern`,
+      );
+    }
+    splits.set(textPath, numberPath);
+  }
+  return splits;
+};
+
 const canonicalRequirementPaths = (paths: readonly string[]): readonly string[] => [
   ...new Set(paths.map((path) => path.replace(TRAILING_WILDCARDS, ''))),
 ];
@@ -361,6 +388,13 @@ const buildEntry = (config: ServerCatalogConfig, descriptor: AnyDescriptor): Cat
     requirementPaths,
   );
   const slots = buildSlotIndex(descriptor, inputJsonSchema);
+  const patterns = compilePatterns(
+    descriptor,
+    inputJsonSchema,
+    slots,
+    config.normalize,
+    config.numberWords ?? new Map(),
+  );
   return {
     descriptor,
     inputShape: relaxEntityPaths(
@@ -376,13 +410,8 @@ const buildEntry = (config: ServerCatalogConfig, descriptor: AnyDescriptor): Cat
     },
     slots,
     requirementPaths,
-    patterns: compilePatterns(
-      descriptor,
-      inputJsonSchema,
-      slots,
-      config.normalize,
-      config.numberWords ?? new Map(),
-    ),
+    patterns,
+    numberSplits: numberSplitsOf(descriptor, patterns, slots),
   };
 };
 
