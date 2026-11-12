@@ -76,6 +76,23 @@ describe('text', () => {
       expect(matchClosedOption(text, tables)?.id).toBe(id);
     });
 
+    test('a full label beats a detail mention on another option', () => {
+      const dishes = [
+        { id: 'lomo', label: 'Lomo saltado', detail: 'Con arroz' },
+        { id: 'chaufa', label: 'Arroz chaufa' },
+      ];
+      expect(matchClosedOption('quiero el arroz chaufa', dishes)?.id).toBe('chaufa');
+      const zones = [
+        { id: 'zone', label: 'Terraza' },
+        { id: 'table', label: 'Mesa 3', detail: 'Terraza' },
+      ];
+      expect(matchClosedOption('la terraza', zones)?.id).toBe('zone');
+    });
+
+    test('a detail alone picks the only option that carries it', () => {
+      expect(matchClosedOption('terraza', tables)?.id).toBe('terraza');
+    });
+
     test('text that fits both options by label alone stays ambiguous', () => {
       expect(matchClosedOption('mesa 3', tables)).toBeUndefined();
     });

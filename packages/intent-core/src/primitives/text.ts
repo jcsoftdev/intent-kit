@@ -44,24 +44,15 @@ const toCandidate = (option: ClosedOption, fold: (text: string) => string): Cand
 const mentionsDetail = (candidate: Candidate, available: ReadonlySet<string>): boolean =>
   candidate.detail.length > 0 && candidate.detail.every((token) => available.has(token));
 
-const narrowByDetail = (
-  mentioned: readonly Candidate[],
-  available: ReadonlySet<string>,
-): readonly Candidate[] => {
-  const named = mentioned.filter((candidate) => mentionsDetail(candidate, available));
-  return named.length > 0 && named.length < mentioned.length ? named : mentioned;
-};
-
 const dominates = (winner: Candidate, others: readonly Candidate[]): boolean =>
   others.every(
     (other) => other === winner || other.content.every((token) => winner.tokens.includes(token)),
   );
 
 const pickMentioned = (
-  allMentioned: readonly Candidate[],
+  mentioned: readonly Candidate[],
   available: ReadonlySet<string>,
 ): Candidate | undefined => {
-  const mentioned = narrowByDetail(allMentioned, available);
   if (mentioned.length <= 1) {
     return mentioned[0];
   }
@@ -70,6 +61,23 @@ const pickMentioned = (
   );
   const winners = full.filter((candidate) => dominates(candidate, mentioned));
   return winners.length === 1 ? winners[0] : undefined;
+};
+
+const onlyOne = (candidates: readonly Candidate[]): Candidate | undefined =>
+  candidates.length === 1 ? candidates[0] : undefined;
+
+const pickByDetail = (
+  candidates: readonly Candidate[],
+  mentioned: readonly Candidate[],
+  available: ReadonlySet<string>,
+): Candidate | undefined => {
+  if (mentioned.length === 0) {
+    return onlyOne(candidates.filter((candidate) => mentionsDetail(candidate, available)));
+  }
+  const labelled = mentioned.filter((candidate) =>
+    candidate.tokens.every((token) => available.has(token)),
+  );
+  return onlyOne(labelled.filter((candidate) => mentionsDetail(candidate, available)));
 };
 
 const isNegatedFor = (candidate: Candidate, available: ReadonlySet<string>): boolean =>
@@ -92,8 +100,9 @@ export const matchClosedOption = (
   }
   const available = new Set(tokensOf(folded));
   const mentioned = candidates.filter((candidate) =>
-    [...candidate.content, ...candidate.detail].some((token) => available.has(token)),
+    candidate.content.some((token) => available.has(token)),
   );
-  const picked = pickMentioned(mentioned, available);
+  const picked =
+    pickMentioned(mentioned, available) ?? pickByDetail(candidates, mentioned, available);
   return picked && !isNegatedFor(picked, available) ? picked.option : undefined;
 };
