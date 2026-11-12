@@ -148,12 +148,10 @@ describe('transition table', () => {
       { name: 'unsupported', suggestions: ['a', 'b'] },
     ],
     [clarifying, answer, interpreting],
-    ...[interpreting, clarifying].map((from): [SessionState, SessionEvent, SessionState] => [
-      from,
-      confirmation,
-      awaiting,
-    ]),
-    ...[interpreting, clarifying, awaiting].map(
+    ...[interpreting, clarifying, failed].map(
+      (from): [SessionState, SessionEvent, SessionState] => [from, confirmation, awaiting],
+    ),
+    ...[interpreting, clarifying, awaiting, failed].map(
       (from): [SessionState, SessionEvent, SessionState] => [from, started, executingUnsent],
     ),
     [executingUnsent, sent(true), executingSentCancellable],
@@ -240,8 +238,8 @@ const EXPECTED_CHANGES: readonly string[] = [
   ),
   'interpreting+interpretation.received',
   'clarifying+answer.submitted',
-  ...['interpreting', 'clarifying'].map((name) => `${name}+confirmation.requested`),
-  ...['interpreting', 'clarifying', 'awaitingConfirmation'].map(
+  ...['interpreting', 'clarifying', 'failed'].map((name) => `${name}+confirmation.requested`),
+  ...['interpreting', 'clarifying', 'awaitingConfirmation', 'failed'].map(
     (name) => `${name}+execution.started`,
   ),
   'executing(unsent)+execution.sent',

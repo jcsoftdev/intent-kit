@@ -91,6 +91,7 @@ These rules are what keep ids and tenants safe. The kit enforces what it can at 
 - **Clients send cumulative answers.** A continuation carries every answer given so far for that command, as the kit's session does.
 - **One kit per signed-in principal.** Create a new kit when the user, tenant or venue changes; a role change alone is handled by the session.
 - **Effects re-check on the API.** The client's authorization is a courtesy; your API authorizes every write again and honors the `idempotencyKey` it receives, including the one on a `CompensationRequest`.
+- **Retry, do not repeat.** After a retryable failure such as a timed-out write, offer `session.retry()`: it re-sends the same plan with the same idempotency key, so the API can deduplicate it. Saying or typing the command again is a new command with a new key, and therefore a new write. `retry()` is refused with a polite notice when the last outcome is not a retryable failure of a dispatched plan, while the session is busy, or after a reset or a role change.
 
 ## Pattern rules
 

@@ -13,11 +13,12 @@ const TERMINAL_NAMES: ReadonlySet<Name> = new Set([
 const CAPTURE_START_FROM: ReadonlySet<Name> = new Set(['idle']);
 const CAPTURE_SUBMIT_FROM: ReadonlySet<Name> = new Set(['idle', 'capturing']);
 const UNDO_START_FROM: ReadonlySet<Name> = new Set(['idle']);
-const CONFIRMATION_FROM: ReadonlySet<Name> = new Set(['interpreting', 'clarifying']);
+const CONFIRMATION_FROM: ReadonlySet<Name> = new Set(['interpreting', 'clarifying', 'failed']);
 const EXECUTION_FROM: ReadonlySet<Name> = new Set([
   'interpreting',
   'clarifying',
   'awaitingConfirmation',
+  'failed',
 ]);
 const SETTLE_FROM: ReadonlySet<Name> = new Set(['executing', 'presenting']);
 const CANCEL_FROM: ReadonlySet<Name> = new Set([

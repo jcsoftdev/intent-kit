@@ -43,6 +43,7 @@ export interface IntentSession {
   chooseCapability(capabilityId: string): Promise<SessionState>;
   cancel(): void;
   undo(planId: string): Promise<SessionState>;
+  retry(): Promise<SessionState>;
   reset(): void;
 }
 
@@ -68,6 +69,7 @@ interface Run<TRole extends string> {
   last: SessionState;
   origin: InterpretationOrigin;
   answers: Answers;
+  dispatched: ExecutablePlan | undefined;
 }
 
 type CompleteInterpretation = Extract<Interpretation, { status: 'complete' }>;
@@ -207,6 +209,7 @@ export function createIntentSession<TPrincipal, TRole extends string>(
   });
 
   const runAction = async (run: Run<TRole>, plan: ExecutablePlan): Promise<void> => {
+    run.dispatched = plan;
     let outcome: Outcome<ActionResult>;
     try {
       outcome = await dependencies.pipeline.run(
@@ -300,6 +303,7 @@ export function createIntentSession<TPrincipal, TRole extends string>(
       last: current,
       origin: 'interpreter',
       answers: {},
+      dispatched: undefined,
     };
     active = run;
     send(run, { type: 'capture.submitted' });
@@ -381,6 +385,7 @@ export function createIntentSession<TPrincipal, TRole extends string>(
       last: current,
       origin: 'interpreter',
       answers: {},
+      dispatched: undefined,
     };
     active = run;
     return run;
@@ -406,6 +411,29 @@ export function createIntentSession<TPrincipal, TRole extends string>(
     }
     await track(runUndo(run, planId));
     return current;
+  };
+
+  const retryablePlanOf = (run: Run<TRole>): ExecutablePlan | undefined =>
+    current.name === 'failed' && current.failure.retryable && !roleChanged(run)
+      ? run.dispatched
+      : undefined;
+
+  const retry = async (): Promise<SessionState> => {
+    const previous = active;
+    const plan = previous ? retryablePlanOf(previous) : undefined;
+    if (!previous || !plan) {
+      notice('NOT_AVAILABLE');
+      return current;
+    }
+    const run: Run<TRole> = {
+      ...previous,
+      controller: new AbortController(),
+      reveal: undefined,
+      last: current,
+    };
+    active = run;
+    await track(runAction(run, plan));
+    return run.last;
   };
 
   return {
@@ -435,6 +463,7 @@ export function createIntentSession<TPrincipal, TRole extends string>(
       }
     },
     undo,
+    retry,
     reset() {
       const run = active;
       droppedUpTo = queueTicket;

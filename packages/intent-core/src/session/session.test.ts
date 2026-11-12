@@ -439,6 +439,116 @@ test('undo after the window fails with STALE_PLAN', async () => {
   expect(h.announcements.at(-1)).toEqual({ message: 'msg:STALE_PLAN', politeness: 'assertive' });
 });
 
+const keyedOrders: AnyDescriptor = {
+  ...ordersCreate,
+  idempotency: { kind: 'key', carrier: 'body', field: 'idempotencyKey' },
+};
+
+const lostFirstResponse = () => {
+  const orders = new Map<string, { readonly orderId: string }>();
+  let attempts = 0;
+  const effect = async (
+    _input: unknown,
+    context: EffectContext,
+  ): Promise<EffectResult<unknown>> => {
+    attempts += 1;
+    const key = context.idempotencyKey ?? '';
+    const order = orders.get(key) ?? { orderId: `o-${orders.size + 1}` };
+    orders.set(key, order);
+    return attempts === 1 ? new Promise(() => undefined) : { ok: true, output: order };
+  };
+  return { effect, orders };
+};
+
+const timedOut = async (h: ReturnType<typeof harness>): Promise<SessionState> => {
+  const submitted = h.session.submit({ text: 'pedido', source: 'text' });
+  await flush();
+  await h.clock.advance(10_000);
+  return submitted;
+};
+
+const notAvailable = { message: 'msg:NOT_AVAILABLE', politeness: 'polite' };
+
+test('retry after a timed-out keyed write re-sends the same plan and key and creates one order', async () => {
+  const api = lostFirstResponse();
+  const h = harness({
+    descriptor: keyedOrders,
+    responders: [answering(complete('p-1'))],
+    effect: api.effect,
+  });
+  expect(await timedOut(h)).toEqual({
+    name: 'failed',
+    failure: { stage: 'execution', code: 'EXECUTION_FAILED', retryable: true },
+  });
+
+  const state = await h.session.retry();
+
+  expect(state.name).toBe('completed');
+  expect(h.calls.map((call) => call.idempotencyKey)).toEqual(['p-1', 'p-1']);
+  expect(api.orders.size).toBe(1);
+  expect(h.interpretations).toHaveLength(1);
+});
+
+test('retry after a non-retryable failure is refused with a polite notice and no state change', async () => {
+  const h = harness({
+    responders: [answering(complete('p-1'))],
+    effect: async () => {
+      throw new Error('boom');
+    },
+  });
+  const failed = await h.session.submit({ text: 'pedido', source: 'text' });
+
+  expect(await h.session.retry()).toBe(failed);
+  expect(h.session.state()).toBe(failed);
+  expect(h.calls).toHaveLength(1);
+  expect(h.announcements.at(-1)).toEqual(notAvailable);
+});
+
+test('retry after an interpretation failure is refused because no plan was dispatched', async () => {
+  const failure: Failure = {
+    stage: 'interpretation',
+    code: 'INTERPRETER_TIMEOUT',
+    retryable: true,
+  };
+  const h = harness({ responders: [async () => ({ ok: false, failure })] });
+  await h.session.submit({ text: 'pedido', source: 'text' });
+
+  expect((await h.session.retry()).name).toBe('failed');
+  expect(h.calls).toEqual([]);
+  expect(h.announcements.at(-1)).toEqual(notAvailable);
+});
+
+test.each([
+  ['a reset', (h: ReturnType<typeof harness>) => h.session.reset(), 'idle'],
+  ['a role change', (h: ReturnType<typeof harness>) => h.setRole('host'), 'failed'],
+])('retry after %s is refused', async (_case, interrupt, stays) => {
+  const api = lostFirstResponse();
+  const h = harness({
+    descriptor: keyedOrders,
+    responders: [answering(complete('p-1'))],
+    effect: api.effect,
+  });
+  await timedOut(h);
+  interrupt(h);
+
+  expect((await h.session.retry()).name).toBe(stays);
+  expect(h.calls).toHaveLength(1);
+  expect(h.announcements.at(-1)).toEqual(notAvailable);
+});
+
+test('retry while busy is refused', async () => {
+  const release = deferred<EffectResult<unknown>>();
+  const h = harness({ responders: [answering(complete('p-1'))], effect: () => release.promise });
+  const submitted = h.session.submit({ text: 'pedido', source: 'text' });
+  await flush();
+
+  expect((await h.session.retry()).name).toBe('executing');
+  expect(h.announcements.at(-1)).toEqual(notAvailable);
+  release.resolve({ ok: true, output: { orderId: 'o-1' } });
+  await submitted;
+  expect(h.calls).toHaveLength(1);
+});
+
 test('cancel while presenting completes with presentation degraded ABORTED and still announces success', async () => {
   const h = harness({
     responders: [answering(complete('p-1'))],

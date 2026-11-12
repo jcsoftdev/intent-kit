@@ -70,7 +70,8 @@ await session.submit({ text: 'pedido de arroz con pollo para la mesa 3', source:
 ## Security contract
 
 - Ids reach a plan only through entity and requirement paths resolved on the server. Never let the client or an LLM fill an id directly.
-- Effects run on the client, so your API must authorize every write again and honor the idempotency key: a timed-out keyed write is retried with the same plan and the same key.
+- Effects run on the client, so your API must authorize every write again and honor the idempotency key.
+- After a retryable failure, such as a timed-out write, call `session.retry()`. It re-sends the same plan with the same key. Saying the command again is a new command with a new key, and therefore a new write. `retry()` is refused with a polite `NOT_AVAILABLE` notice when the last outcome is not a retryable failure of a dispatched plan, while busy, or after a reset or a role change.
 - Create one kit per signed-in principal. A role change is handled by the session; a user, tenant or venue change is not.
 - Continuations carry every answer given so far for the command; the session does this for you.
 
