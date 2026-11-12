@@ -19,6 +19,8 @@ const rankInView = (proposals: readonly Proposal[], view: ServerCatalogView): re
     .filter((proposal) => view.get(proposal.capabilityId))
     .sort((a, b) => b.confidence - a.confidence);
 
+const isDecisiveGap = (gap: number): boolean => gap >= MIN_CONFIDENCE_GAP - CONFIDENCE_EPSILON;
+
 const isDecisive = (ranked: readonly Proposal[]): boolean => {
   const [top, second] = ranked;
   if (!top) {
@@ -26,8 +28,7 @@ const isDecisive = (ranked: readonly Proposal[]): boolean => {
   }
   return (
     !second ||
-    (top.confidence >= MIN_TOP_CONFIDENCE &&
-      top.confidence - second.confidence >= MIN_CONFIDENCE_GAP - CONFIDENCE_EPSILON)
+    (top.confidence >= MIN_TOP_CONFIDENCE && isDecisiveGap(top.confidence - second.confidence))
   );
 };
 
@@ -36,7 +37,7 @@ const contendersOf = (ranked: readonly Proposal[]): readonly Proposal[] => {
   if (!top || top.confidence < MIN_TOP_CONFIDENCE) {
     return ranked;
   }
-  return ranked.filter((proposal) => top.confidence - proposal.confidence < MIN_CONFIDENCE_GAP);
+  return ranked.filter((proposal) => !isDecisiveGap(top.confidence - proposal.confidence));
 };
 
 const sameSlotValue = (a: Proposal['slots'][string], b: Proposal['slots'][string] | undefined) =>

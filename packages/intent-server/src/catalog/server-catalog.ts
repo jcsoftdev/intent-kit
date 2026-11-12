@@ -22,6 +22,7 @@ import type { SlotIndex } from '../text/slots.js';
 export interface CatalogEntry {
   readonly descriptor: AnyDescriptor;
   readonly manifest: CapabilityManifestEntry;
+  readonly inputShape: JsonObject;
   readonly slots: SlotIndex;
   readonly requirementPaths: readonly string[];
   readonly patterns: readonly CompiledPattern[];
@@ -49,7 +50,8 @@ const SLOT_CAPS = 'patterns allow at most 4 slots, at most 2 text slots and no s
 const SLOT_TOKEN = /\{[^{}]*\}/g;
 const SLOT_IN_ALTERNATION = /\([^()]*\{/;
 const LITERAL_SPLIT = /[\s()|[\]?]+/;
-const ID_SUFFIX = /(?:Id|Ids|ID|IDs|_id|_ids|_ID|_IDs)$|^(?:id|ids|ID|IDs)$/;
+const ID_SUFFIX =
+  /(?:Id|Ids|ID|IDs|Uuid|Uuids|UUID|UUIDs|[_-](?:id|ids|ID|IDs|uuid|uuids))$|^(?:id|ids|ID|IDs)$/;
 const TRAILING_WILDCARDS = /(\[\])+$/;
 const NON_LITERAL = /\{[^{}]*\}|[\s()|[\]?]/g;
 const WILDCARD = '[]';
@@ -126,14 +128,35 @@ const assertIdLeavesAreEntities = (
 const isOpenAdditional = (node: Readonly<Record<string, unknown>>): boolean =>
   node.additionalProperties !== undefined && node.additionalProperties !== false;
 
-const hasOpenObject = (node: unknown): boolean => {
+const SHAPING_KEYS = [
+  'type',
+  'properties',
+  'items',
+  'anyOf',
+  'oneOf',
+  'allOf',
+  'enum',
+  'const',
+  'format',
+  'not',
+];
+
+const isUnconstrained = (node: Readonly<Record<string, unknown>>): boolean =>
+  !SHAPING_KEYS.some((key) => key in node);
+
+const hasUnenumerableShape = (node: Readonly<Record<string, unknown>>): boolean =>
+  '$ref' in node || '$defs' in node || 'definitions' in node || 'prefixItems' in node;
+
+const hasOpenObject = (node: unknown, isRoot = true): boolean => {
   if (!isRecord(node)) {
     return false;
   }
   return (
     isOpenAdditional(node) ||
-    childSchemas(node).some(([, child]) => hasOpenObject(child)) ||
-    branchSchemas(node).some(hasOpenObject)
+    hasUnenumerableShape(node) ||
+    (!isRoot && isUnconstrained(node)) ||
+    childSchemas(node).some(([, child]) => hasOpenObject(child, false)) ||
+    branchSchemas(node).some((branch) => hasOpenObject(branch, false))
   );
 };
 
@@ -141,7 +164,7 @@ const assertClosedObjects = (descriptor: AnyDescriptor, schema: JsonObject): voi
   if (descriptor.agent !== 'never' && hasOpenObject(schema)) {
     throw new IntentDefinitionError(
       'INVALID_SCHEMA',
-      `${descriptor.id} accepts unknown keys in its input, so undeclared ids could pass through; use a strict or stripping object`,
+      `${descriptor.id} accepts keys the kit cannot enumerate (open objects, $ref, tuples or unconstrained values), so undeclared ids could pass through; use strict or stripping objects`,
     );
   }
 };
@@ -275,14 +298,17 @@ const isRequiredAt = (node: JsonObject, segments: readonly PathSegment[]): boole
     return isJsonObject(node.items) && isRequiredAt(node.items, rest);
   }
   const properties = node.properties;
+  const viaBranches = branchSchemas(node).some(
+    (branch) => isJsonObject(branch) && isRequiredAt(branch, segments),
+  );
   if (typeof head !== 'string' || !isJsonObject(properties)) {
-    return false;
+    return viaBranches;
   }
   if (rest.length === 0) {
-    return Array.isArray(node.required) && node.required.includes(head);
+    return (Array.isArray(node.required) && node.required.includes(head)) || viaBranches;
   }
   const child = properties[head];
-  return isJsonObject(child) && isRequiredAt(child, rest);
+  return (isJsonObject(child) && isRequiredAt(child, rest)) || viaBranches;
 };
 
 const omitPath = (node: JsonObject, segments: readonly PathSegment[]): JsonObject => {
@@ -335,6 +361,10 @@ const buildEntry = (config: ServerCatalogConfig, descriptor: AnyDescriptor): Cat
   const slots = buildSlotIndex(descriptor, inputJsonSchema);
   return {
     descriptor,
+    inputShape: relaxEntityPaths(
+      rawSchema,
+      descriptor.entities.map(({ path }) => path),
+    ),
     manifest: {
       id: descriptor.id,
       description: descriptor.description,

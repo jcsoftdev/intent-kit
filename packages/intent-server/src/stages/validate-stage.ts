@@ -1,5 +1,6 @@
 import { overlaps, setAtPath } from '@jcsoftdev/intent-core';
 import type { Interpretation, SchemaAdapter, Stage } from '@jcsoftdev/intent-core';
+import { pruneToSchema } from '../catalog/prune-input.js';
 import type { InterpretationCopy } from '../copy.js';
 import { INTERPRETATION_STAGES } from '../state.js';
 import type { InterpretationState } from '../state.js';
@@ -57,7 +58,7 @@ export const createValidateStage = <TPrincipal>(config: {
       signal: context.signal,
     });
     if (validated.ok) {
-      context.set('validInput', validated.value);
+      context.set('validInput', pruneToSchema(entry.inputShape, validated.value));
       return next();
     }
     const [first] = await config.schema.missingPaths(descriptor.input, input, {

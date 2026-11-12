@@ -294,7 +294,23 @@ describe('front interpretation stages', () => {
       proposed(proposalOf('orders.create', 0.7), proposalOf('kitchen.lines.markReady', 0.5)),
     );
     const outcome = await leader.run({ input: utterance('quiero algo'), principal: waiter });
-    expect(outcome).not.toMatchObject({ value: { status: 'ambiguous' } });
+    expect(outcome).toMatchObject({
+      ok: true,
+      value: { draft: { capabilityId: 'orders.create' } },
+    });
+  });
+
+  test('a contender exactly 0.2 below the leader by float arithmetic is not a contender', async () => {
+    const trio = harness(() =>
+      proposed(
+        proposalOf('orders.create', 0.7),
+        proposalOf('kitchen.lines.markReady', 0.65),
+        proposalOf('cash.shift.close', 0.5),
+      ),
+    );
+    const outcome = await trio.run({ input: utterance('quiero algo'), principal: waiter });
+    expect(outcome).toMatchObject({ ok: true, value: { status: 'ambiguous' } });
+    expect(JSON.stringify(outcome)).not.toContain('cash.shift.close');
   });
 
   test('two close proposals are ambiguous and a clear leader wins', async () => {

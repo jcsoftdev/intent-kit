@@ -960,7 +960,17 @@ describe('interpretation service', () => {
     });
 
     test('m3: id, ids, ID, IDs, _id and _ids suffixes are id-shaped', () => {
-      for (const name of ['id', 'ids', 'ID', 'IDs', 'tableID', 'modifier_ids', 'sub_id']) {
+      for (const name of [
+        'id',
+        'ids',
+        'ID',
+        'IDs',
+        'tableID',
+        'modifier_ids',
+        'sub_id',
+        'table-id',
+        'tableUuid',
+      ]) {
         const named = define({
           ...base,
           id: 'orders.create',
@@ -1000,6 +1010,68 @@ describe('interpretation service', () => {
       expect(() =>
         serviceWith([open(z.strictObject({ note: z.string().optional() }), 'allowed')], []),
       ).not.toThrow();
+    });
+
+    test('T1b: shapes the leaf walker cannot enumerate are INVALID_SCHEMA at creation', () => {
+      type Loose = z.ZodType;
+      const recursive: Loose = z.object({
+        note: z.string().optional(),
+        child: z.lazy(() => recursive).optional(),
+      });
+      const inputs: readonly z.ZodType[] = [
+        recursive,
+        z.object({ pair: z.tuple([z.string(), z.string()]) }),
+        z.object({ blob: z.unknown() }),
+        z.object({ blob: z.any() }),
+      ];
+      for (const input of inputs) {
+        const open = define({
+          ...base,
+          id: 'orders.create',
+          description: 'Create an order',
+          input,
+          roles: ['waiter'],
+        });
+        expect(() => serviceWith([open], [])).toThrow('INVALID_SCHEMA');
+      }
+    });
+
+    test('T1b: unknown keys are pruned from the validated input at runtime, even through an intersection', async () => {
+      const merged = define({
+        ...base,
+        id: 'orders.create',
+        description: 'Create an order',
+        input: z.intersection(
+          z.object({ note: z.string().optional(), lines: z.array(z.object({ qty: z.number() })) }),
+          z.looseObject({}),
+        ),
+        roles: ['waiter'],
+      });
+      const { service } = serviceWith([merged], []);
+      const outcome = await service.interpret(
+        waiter,
+        continuation(
+          { note: 'x', tableId: 'tbl-foreign', lines: [{ qty: 1, offeringId: 'dish-foreign' }] },
+          {},
+        ),
+        { signal },
+      );
+      expect(outcome).toMatchObject({ ok: true, value: { status: 'complete' } });
+      expect(JSON.stringify(outcome)).not.toContain('foreign');
+    });
+
+    test('m2: a requirement path required inside a union branch is INVALID_SCHEMA', () => {
+      const union = define({
+        ...base,
+        id: 'orders.create',
+        description: 'Create an order',
+        input: z.union([
+          z.object({ o: z.object({ s: z.array(z.string()) }) }),
+          z.object({ t: z.string() }),
+        ]),
+        roles: ['waiter'],
+      });
+      expect(() => serviceWith([union], [lineProbe(['o.s'])])).toThrow('INVALID_SCHEMA');
     });
   });
 });
