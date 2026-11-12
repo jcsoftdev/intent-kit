@@ -135,17 +135,29 @@ const offeredReadings = (readings: readonly ReadingLookup[]): readonly ReadingLo
 const offeredOptions = (readings: readonly ReadingLookup[]): readonly ClosedOption[] =>
   distinctById(offeredReadings(readings).flatMap(({ lookup }) => optionsOf(lookup)));
 
-const labelContainsNumber = (
+const keyTokensOf = (text: string, keyOf: (text: string) => string): readonly string[] =>
+  keyOf(text)
+    .split(' ')
+    .filter((token) => token !== '');
+
+const containsInOrder = (tokens: readonly string[], sequence: readonly string[]): boolean =>
+  tokens.some((_, start) => sequence.every((token, offset) => tokens[start + offset] === token));
+
+const labelContainsUnsplitText = (
   split: NumberSplit,
   label: string,
   keyOf: (text: string) => string,
-): boolean => keyOf(label).split(' ').includes(String(split.value));
+): boolean =>
+  containsInOrder(keyTokensOf(label, keyOf), [
+    String(split.value),
+    ...keyTokensOf(split.rest, keyOf),
+  ]);
 
 const readingForSharedOption = (
   split: NumberSplit,
   option: ClosedOption,
   keyOf: (text: string) => string,
-): SplitReading => (labelContainsNumber(split, option.label, keyOf) ? 'named' : 'counted');
+): SplitReading => (labelContainsUnsplitText(split, option.label, keyOf) ? 'named' : 'counted');
 
 const resolvedBy = (
   reading: SplitReading,

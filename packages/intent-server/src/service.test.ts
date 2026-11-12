@@ -288,6 +288,10 @@ const CEVICHE_MENU: readonly EntityRecord[] = [
   { id: 'dish-tres-leches-clasico', label: 'Tres leches clásico' },
 ];
 
+const LITRE_CHICHA_MENU: readonly EntityRecord[] = [
+  { id: 'dish-chicha-2l', label: 'Chicha 2 litros' },
+];
+
 const ONLY_CHICHA_MENU: readonly EntityRecord[] = [{ id: 'dish-chicha', label: 'Chicha' }];
 
 const TRES_LECHES_MENU: readonly EntityRecord[] = [
@@ -457,6 +461,27 @@ describe('interpretation service', () => {
     });
 
     test.each([
+      [
+        'dos chicha para la mesa 3',
+        LITRE_CHICHA_MENU,
+        { offeringId: 'dish-chicha-2l', quantity: 2 },
+      ],
+      [
+        'dos leches para la mesa 3',
+        TRES_LECHES_MENU,
+        { offeringId: 'dish-tres-leches-clasico', quantity: 2 },
+      ],
+      ['tres leches para la mesa 3', TRES_LECHES_MENU, { offeringId: 'dish-tres-leches-clasico' }],
+    ])(
+      '%s keeps the quantity unless the label contains the whole unsplit text',
+      async (text, menu, line) => {
+        const outcome = await interpretText(text, menu);
+        expect(outcome).toMatchObject({ ok: true, value: { status: 'complete' } });
+        expect(linesOf(outcome)).toEqual([line]);
+      },
+    );
+
+    test.each([
       ['dos chicha para la mesa 3', CHICHA_MENU, 'dos chicha'],
       ['dos chicha para la mesa 3', MORADA_MENU, 'dos chicha'],
       ['cuatro pizza para la mesa 3', PIZZA_MENU, 'cuatro pizza'],
@@ -470,7 +495,7 @@ describe('interpretation service', () => {
     test.each([
       ['dish-chicha-2l', CHICHA_MENU, { offeringId: 'dish-chicha-2l' }],
       ['dish-chicha', CHICHA_MENU, { offeringId: 'dish-chicha', quantity: 2 }],
-      ['dish-chicha-2l', MORADA_MENU, { offeringId: 'dish-chicha-2l' }],
+      ['dish-chicha-2l', MORADA_MENU, { offeringId: 'dish-chicha-2l', quantity: 2 }],
       ['dish-chicha-morada', MORADA_MENU, { offeringId: 'dish-chicha-morada', quantity: 2 }],
     ])(
       'after "dos chicha", answering %s (menu %#) applies only that reading',
