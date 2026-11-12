@@ -15,6 +15,7 @@ import type {
 } from './schemas.js';
 
 export const OUT_OF_SEQUENCE = 'LINEA_FUERA_DE_SECUENCIA';
+export const MISSING_IDEMPOTENCY_KEY = 'MISSING_IDEMPOTENCY_KEY';
 
 const aborted: EffectResult<never> = { ok: false, failure: abortFailure('execution') };
 
@@ -50,11 +51,14 @@ export function createOrdersCreateEffect(
       if (context.signal.aborted) {
         return aborted;
       }
+      if (context.idempotencyKey === undefined) {
+        return executionFailure('INVALID_INPUT', MISSING_IDEMPOTENCY_KEY);
+      }
       const { tenantId, userId } = principal();
       const placed = store.placeOrder({
         tenantId,
         waiterId: userId,
-        idempotencyKey: context.idempotencyKey ?? context.planId,
+        idempotencyKey: context.idempotencyKey,
         tableId: input.tableId,
         lines: input.lines,
         now: now(),

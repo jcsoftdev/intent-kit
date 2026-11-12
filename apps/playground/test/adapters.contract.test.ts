@@ -72,7 +72,7 @@ const dishResolver = () => {
 
 describeEntityResolverContract<PlaygroundPrincipal>('dish resolver', () => {
   const { store, resolver } = dishResolver();
-  const hiddenIds = store.dishes(TENANT_ID).map(({ id }) => id);
+  const dishIds = store.dishes(TENANT_ID).map(({ id }) => id);
   return {
     resolver,
     principal: waiter,
@@ -82,9 +82,9 @@ describeEntityResolverContract<PlaygroundPrincipal>('dish resolver', () => {
     options: {
       path: 'lines[0].offeringId',
       draft: { capabilityId: 'orders.create', version: 1, input: {} },
-      ids: hiddenIds,
+      ids: dishIds,
     },
-    foreign: { principal: foreignWaiter, hiddenIds },
+    foreign: { principal: foreignWaiter, hiddenIds: dishIds },
   };
 });
 

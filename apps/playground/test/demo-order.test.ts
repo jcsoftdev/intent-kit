@@ -65,6 +65,8 @@ describe('9.1 A: a complete deterministic order', () => {
     const [order] = playground.store.orders(TENANT_ID);
     expect(playground.store.orders(TENANT_ID)).toHaveLength(1);
     expect(order?.idempotencyKey).toBe(result.planId);
+    expect(order?.total).toBe(28);
+    expect(order?.tableId).toBe(FIXTURE_IDS.tableSalon3);
     expect(playground.revealer.revealed().map(({ element }) => element.id)).toEqual([
       `my-order:${order?.id}`,
     ]);
@@ -153,6 +155,23 @@ describe('ambiguity and typos', () => {
     expect(playground.store.orders(TENANT_ID)).toHaveLength(0);
   });
 
+  it.each([
+    ['terraza', FIXTURE_IDS.tableTerrace3],
+    ['salón', FIXTURE_IDS.tableSalon3],
+  ])('places the order on the zone answered by text: %s', async (answer, tableId) => {
+    const playground = createPlayground({ principal: waiter });
+    playground.store.addTable(TERRACE_TABLE);
+    await playground.session.submit({
+      text: 'pedido de arroz con pollo para la mesa 3',
+      source: 'text',
+    });
+
+    const state = await playground.session.answerByText(answer);
+
+    completedResult(state);
+    expect(playground.store.orders(TENANT_ID).map((order) => order.tableId)).toEqual([tableId]);
+  });
+
   it('offers the nearest dish for a misspelled one', async () => {
     const playground = createPlayground({ principal: waiter });
 
@@ -176,6 +195,19 @@ describe('ambiguity and typos', () => {
     expect(playground.store.lines(TENANT_ID).map(({ dishName }) => dishName)).toEqual([
       'Tres leches',
     ]);
+    expect(playground.store.orders(TENANT_ID).map(({ total }) => total)).toEqual([14]);
+  });
+
+  it('keeps a spoken quantity in front of a dish whose name starts with a number word', async () => {
+    const playground = createPlayground({ principal: waiter });
+
+    const state = await playground.session.submit({
+      text: 'dos tres leches para la mesa 3',
+      source: 'text',
+    });
+
+    completedResult(state);
+    expect(playground.store.orders(TENANT_ID).map(({ total }) => total)).toEqual([28]);
   });
 });
 
@@ -189,6 +221,9 @@ describe('the keyword interpreter', () => {
     });
 
     completedResult(state);
+    const [order] = playground.store.orders(TENANT_ID);
+    expect(order?.total).toBe(28);
+    expect(order?.tableId).toBe(FIXTURE_IDS.tableSalon3);
     expect(playground.interpreter.calls()).toHaveLength(1);
     expect(playground.events.events()).toContainEqual(
       expect.objectContaining({

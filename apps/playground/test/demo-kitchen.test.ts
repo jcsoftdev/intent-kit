@@ -2,7 +2,7 @@ import type { IntentSession, SessionState } from '@jcsoftdev/intent-core';
 import { describe, expect, it, vi } from 'vitest';
 import { createPlayground } from '../src/index.js';
 import type { Playground } from '../src/index.js';
-import { MINUTE_MS, TENANT_ID, seedKitchenLine } from '../src/restaurant.js';
+import { MINUTE_MS, TENANT_ID, fixtureId, seedKitchenLine } from '../src/restaurant.js';
 import type { PlaygroundPrincipal } from '../src/restaurant.js';
 
 const GRACE_MS = 5000;
@@ -119,7 +119,9 @@ describe('9.2 mark a dish as ready', () => {
       [expect.any(String), 'LISTO'],
       [expect.any(String), 'EN_COLA'],
     ]);
-    expect(playground.store.transitions().every(({ lineId }) => lineId.endsWith('1'))).toBe(true);
+    expect(playground.store.transitions().every(({ lineId }) => lineId === fixtureId(5, 1))).toBe(
+      true,
+    );
   });
 
   it('undoes during the grace window and leaves the line in the queue', async () => {

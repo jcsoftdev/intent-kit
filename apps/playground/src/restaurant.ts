@@ -191,7 +191,9 @@ const TABLE_SEEDS: readonly TableRecord[] = [
   { id: FIXTURE_IDS.foreignTable3, tenantId: FOREIGN_TENANT_ID, number: 3, zone: 'Salón' },
 ];
 
-export const KNOWN_DISH_NAMES: readonly string[] = DISH_SEEDS.map(({ name }) => name);
+export const KNOWN_DISH_NAMES: readonly string[] = DISH_SEEDS.filter(
+  ({ tenantId }) => tenantId === TENANT_ID,
+).map(({ name }) => name);
 
 export interface KitchenLineSeed {
   readonly index: number;
@@ -267,11 +269,11 @@ export function createRestaurantStore(): RestaurantStore {
         (order) =>
           order.tenantId === request.tenantId && order.idempotencyKey === request.idempotencyKey,
       );
-      const table = forTenant(tableRecords, request.tenantId).find(
-        ({ id }) => id === request.tableId,
-      );
-      if (repeated && table) {
-        return { ok: true, order: repeated, tableLabel: tableLabel(table) };
+      const tables = forTenant(tableRecords, request.tenantId);
+      const table = tables.find(({ id }) => id === request.tableId);
+      const firstTable = tables.find(({ id }) => id === repeated?.tableId);
+      if (repeated && firstTable) {
+        return { ok: true, order: repeated, tableLabel: tableLabel(firstTable) };
       }
       if (!table) {
         return { ok: false, reason: 'TABLE_NOT_FOUND' };

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createPlayground } from '../src/index.js';
-import { FIXTURE_IDS, TENANT_ID } from '../src/restaurant.js';
+import { FIXTURE_IDS, FOREIGN_TENANT_ID, TENANT_ID } from '../src/restaurant.js';
 import type { PlaygroundPrincipal, PlaygroundRole } from '../src/restaurant.js';
 
 const principalOf = (role: PlaygroundRole): PlaygroundPrincipal => ({
@@ -96,29 +96,70 @@ describe('confirmation of destructive voice commands', () => {
 });
 
 describe('tampered continuations and repeated plans', () => {
+  const continuationWith = (tableId: string) =>
+    ({
+      kind: 'continuation',
+      locale: 'es-PE',
+      source: 'text',
+      origin: 'deterministic',
+      continuation: {
+        draft: {
+          capabilityId: 'orders.create',
+          version: 1,
+          input: { lines: [{ offeringId: 'arroz con pollo' }] },
+        },
+        answers: { tableId },
+      },
+    }) as const;
+
+  it('accepts the same continuation with a table of its own tenant', async () => {
+    const playground = createPlayground({ principal: principalOf('waiter') });
+
+    const outcome = await playground.service.interpret(
+      principalOf('waiter'),
+      continuationWith(FIXTURE_IDS.tableSalon3),
+      { signal },
+    );
+
+    expect(outcome).toMatchObject({ ok: true, value: { status: 'complete' } });
+  });
+
   it('rejects a continuation that carries a table id of another tenant', async () => {
     const playground = createPlayground({ principal: principalOf('waiter') });
 
     const outcome = await playground.service.interpret(
       principalOf('waiter'),
-      {
-        kind: 'continuation',
-        locale: 'es-PE',
-        source: 'text',
-        origin: 'deterministic',
-        continuation: {
-          draft: {
-            capabilityId: 'orders.create',
-            version: 1,
-            input: { lines: [{ offeringId: 'arroz con pollo' }] },
-          },
-          answers: { tableId: FIXTURE_IDS.foreignTable3 },
-        },
-      },
+      continuationWith(FIXTURE_IDS.foreignTable3),
       { signal },
     );
 
     expect(outcome).toMatchObject({ ok: false, failure: { code: 'INVALID_INPUT' } });
+  });
+
+  it('keeps tenants apart when a t-2 waiter places an order', async () => {
+    const foreign: PlaygroundPrincipal = {
+      tenantId: FOREIGN_TENANT_ID,
+      userId: 'w-9',
+      roles: ['waiter'],
+      activeRole: 'waiter',
+    };
+    const playground = createPlayground({ principal: foreign });
+
+    const state = await playground.session.submit({
+      text: 'pedido de arroz con pollo para la mesa 3',
+      source: 'text',
+    });
+
+    expect(state.name).toBe('completed');
+    expect(playground.store.orders(TENANT_ID)).toEqual([]);
+    expect(playground.store.lines(TENANT_ID)).toEqual([]);
+    expect(
+      playground.store.orders(FOREIGN_TENANT_ID).map(({ tableId, total }) => [tableId, total]),
+    ).toEqual([[FIXTURE_IDS.foreignTable3, 30]]);
+    expect(
+      playground.store.dishes(TENANT_ID).find(({ id }) => id === FIXTURE_IDS.arrozConPollo)
+        ?.portions,
+    ).toBe(8);
   });
 
   it('creates one order when the same complete plan is dispatched twice', async () => {
