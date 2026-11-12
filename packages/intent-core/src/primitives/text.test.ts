@@ -60,4 +60,29 @@ describe('text', () => {
   test('a custom fold is applied to text and labels', () => {
     expect(matchClosedOption('YUCA', options, (text) => text.toLowerCase())?.id).toBe('yuca');
   });
+
+  describe('detail', () => {
+    const tables = [
+      { id: 'salon', label: 'Mesa 3', detail: 'Salón' },
+      { id: 'terraza', label: 'Mesa 3', detail: 'Terraza' },
+    ];
+
+    test.each([
+      ['mesa 3 terraza', 'terraza'],
+      ['la de terraza', 'terraza'],
+      ['mesa 3 del salon', 'salon'],
+      ['Mesa 3 Salón', 'salon'],
+    ])('%s picks the option whose detail is mentioned', (text, id) => {
+      expect(matchClosedOption(text, tables)?.id).toBe(id);
+    });
+
+    test('text that fits both options by label alone stays ambiguous', () => {
+      expect(matchClosedOption('mesa 3', tables)).toBeUndefined();
+    });
+
+    test('naming both details or negating the chosen one picks nothing', () => {
+      expect(matchClosedOption('mesa 3 salon o terraza', tables)).toBeUndefined();
+      expect(matchClosedOption('mesa 3 no terraza', tables)).toBeUndefined();
+    });
+  });
 });

@@ -31,12 +31,25 @@ interface Candidate {
   readonly option: ClosedOption;
   readonly tokens: readonly string[];
   readonly content: readonly string[];
+  readonly detail: readonly string[];
 }
 
 const toCandidate = (option: ClosedOption, fold: (text: string) => string): Candidate => {
   const tokens = tokensOf(fold(option.label));
   const content = tokens.filter((token) => !CONNECTORS.has(token));
-  return { option, tokens, content: content.length > 0 ? content : tokens };
+  const detail = tokensOf(fold(option.detail ?? '')).filter((token) => !CONNECTORS.has(token));
+  return { option, tokens, content: content.length > 0 ? content : tokens, detail };
+};
+
+const mentionsDetail = (candidate: Candidate, available: ReadonlySet<string>): boolean =>
+  candidate.detail.length > 0 && candidate.detail.every((token) => available.has(token));
+
+const narrowByDetail = (
+  mentioned: readonly Candidate[],
+  available: ReadonlySet<string>,
+): readonly Candidate[] => {
+  const named = mentioned.filter((candidate) => mentionsDetail(candidate, available));
+  return named.length > 0 && named.length < mentioned.length ? named : mentioned;
 };
 
 const dominates = (winner: Candidate, others: readonly Candidate[]): boolean =>
@@ -45,9 +58,10 @@ const dominates = (winner: Candidate, others: readonly Candidate[]): boolean =>
   );
 
 const pickMentioned = (
-  mentioned: readonly Candidate[],
+  allMentioned: readonly Candidate[],
   available: ReadonlySet<string>,
 ): Candidate | undefined => {
+  const mentioned = narrowByDetail(allMentioned, available);
   if (mentioned.length <= 1) {
     return mentioned[0];
   }
@@ -68,13 +82,17 @@ export const matchClosedOption = (
 ): ClosedOption | undefined => {
   const folded = fold(text);
   const candidates = options.map((option) => toCandidate(option, fold));
-  const exact = candidates.filter((candidate) => candidate.tokens.join(' ') === folded);
+  const exact = candidates.filter(
+    (candidate) =>
+      candidate.tokens.join(' ') === folded ||
+      [...candidate.tokens, ...tokensOf(fold(candidate.option.detail ?? ''))].join(' ') === folded,
+  );
   if (exact.length > 0) {
     return exact.length === 1 ? exact[0]?.option : undefined;
   }
   const available = new Set(tokensOf(folded));
   const mentioned = candidates.filter((candidate) =>
-    candidate.content.some((token) => available.has(token)),
+    [...candidate.content, ...candidate.detail].some((token) => available.has(token)),
   );
   const picked = pickMentioned(mentioned, available);
   return picked && !isNegatedFor(picked, available) ? picked.option : undefined;
