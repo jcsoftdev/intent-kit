@@ -33,6 +33,7 @@ export type SessionEvent =
       readonly interpretation: Exclude<Interpretation, { status: 'complete' }>;
     }
   | { readonly type: 'answer.submitted' }
+  | { readonly type: 'retry.started'; readonly planId: string }
   | { readonly type: 'confirmation.requested'; readonly planId: string }
   | { readonly type: 'execution.started'; readonly planId: string }
   | { readonly type: 'execution.sent'; readonly cancellableAfterSend: boolean }

@@ -69,7 +69,11 @@ interface Run<TRole extends string> {
   last: SessionState;
   origin: InterpretationOrigin;
   answers: Answers;
-  dispatched: ExecutablePlan | undefined;
+}
+
+interface RetryablePlan<TRole extends string> {
+  readonly run: Run<TRole>;
+  readonly plan: ExecutablePlan;
 }
 
 type CompleteInterpretation = Extract<Interpretation, { status: 'complete' }>;
@@ -103,6 +107,7 @@ export function createIntentSession<TPrincipal, TRole extends string>(
   let queueTicket = 0;
   let droppedUpTo = 0;
   let undoAbort: AbortController | undefined;
+  let retryable: RetryablePlan<TRole> | undefined;
 
   const send = (run: Run<TRole>, event: SessionEvent): void => {
     if (run !== active) {
@@ -209,7 +214,6 @@ export function createIntentSession<TPrincipal, TRole extends string>(
   });
 
   const runAction = async (run: Run<TRole>, plan: ExecutablePlan): Promise<void> => {
-    run.dispatched = plan;
     let outcome: Outcome<ActionResult>;
     try {
       outcome = await dependencies.pipeline.run(
@@ -230,6 +234,7 @@ export function createIntentSession<TPrincipal, TRole extends string>(
     if (outcome.ok) {
       send(run, { type: 'action.settled', result: outcome.value });
     } else if (!run.controller.signal.aborted) {
+      retryable = outcome.failure.retryable ? { run, plan } : undefined;
       fail(run, outcome.failure);
     }
   };
@@ -277,6 +282,7 @@ export function createIntentSession<TPrincipal, TRole extends string>(
   });
 
   const submit = async (command: Command): Promise<SessionState> => {
+    retryable = undefined;
     queueTicket += 1;
     const ticket = queueTicket;
     await Promise.resolve();
@@ -303,7 +309,6 @@ export function createIntentSession<TPrincipal, TRole extends string>(
       last: current,
       origin: 'interpreter',
       answers: {},
-      dispatched: undefined,
     };
     active = run;
     send(run, { type: 'capture.submitted' });
@@ -385,13 +390,13 @@ export function createIntentSession<TPrincipal, TRole extends string>(
       last: current,
       origin: 'interpreter',
       answers: {},
-      dispatched: undefined,
     };
     active = run;
     return run;
   };
 
   const undo = async (planId: string): Promise<SessionState> => {
+    retryable = undefined;
     const run = active ?? adoptIdleRun();
     if (current.name === 'executing' && current.planId === planId) {
       await dependencies.undo
@@ -413,26 +418,28 @@ export function createIntentSession<TPrincipal, TRole extends string>(
     return current;
   };
 
-  const retryablePlanOf = (run: Run<TRole>): ExecutablePlan | undefined =>
-    current.name === 'failed' && current.failure.retryable && !roleChanged(run)
-      ? run.dispatched
-      : undefined;
+  const canRetry = (pending: RetryablePlan<TRole> | undefined): pending is RetryablePlan<TRole> =>
+    pending !== undefined &&
+    pending.run === active &&
+    current.name === 'failed' &&
+    !roleChanged(pending.run);
 
   const retry = async (): Promise<SessionState> => {
-    const previous = active;
-    const plan = previous ? retryablePlanOf(previous) : undefined;
-    if (!previous || !plan) {
+    const pending = retryable;
+    if (!canRetry(pending)) {
       notice('NOT_AVAILABLE');
       return current;
     }
+    retryable = undefined;
     const run: Run<TRole> = {
-      ...previous,
+      ...pending.run,
       controller: new AbortController(),
       reveal: undefined,
       last: current,
     };
     active = run;
-    await track(runAction(run, plan));
+    send(run, { type: 'retry.started', planId: pending.plan.planId });
+    await track(runAction(run, pending.plan));
     return run.last;
   };
 
@@ -465,6 +472,7 @@ export function createIntentSession<TPrincipal, TRole extends string>(
     undo,
     retry,
     reset() {
+      retryable = undefined;
       const run = active;
       droppedUpTo = queueTicket;
       if (run) {

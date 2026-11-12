@@ -142,6 +142,7 @@ interface Options {
   readonly confirm?: () => Promise<'confirmed' | 'declined'>;
   readonly reveal?: (signal: AbortSignal) => Promise<void>;
   readonly holdSecondAuthorization?: Promise<void>;
+  readonly holdAuthorization?: { readonly at: number; readonly until: Promise<void> };
   readonly compensate?: (signal: AbortSignal) => Promise<EffectResult<unknown>>;
 }
 
@@ -177,6 +178,9 @@ const harness = (options: Options = {}) => {
         authorizations += 1;
         if (authorizations === 2) {
           await options.holdSecondAuthorization;
+        }
+        if (authorizations === options.holdAuthorization?.at) {
+          await options.holdAuthorization.until;
         }
         return baseAuthorizer.authorize(principal, authorized, authorizeOptions);
       },
@@ -547,6 +551,134 @@ test('retry while busy is refused', async () => {
   release.resolve({ ok: true, output: { orderId: 'o-1' } });
   await submitted;
   expect(h.calls).toHaveLength(1);
+});
+
+const RETRY_REVALIDATION = 3;
+
+const abortedFailure: Failure = { stage: 'execution', code: 'ABORTED', retryable: true };
+
+const heldRetry = async (responders: readonly Responder[] = []) => {
+  const gate = deferred<void>();
+  const api = lostFirstResponse();
+  const h = harness({
+    descriptor: keyedOrders,
+    responders: [answering(complete('p-1')), ...responders],
+    effect: api.effect,
+    holdAuthorization: { at: RETRY_REVALIDATION, until: gate.promise },
+  });
+  await timedOut(h);
+  const retried = h.session.retry();
+  expect(h.session.state()).toEqual({
+    name: 'executing',
+    planId: 'p-1',
+    sent: false,
+    cancellableAfterSend: false,
+  });
+  return { h, gate, retried };
+};
+
+test.each([
+  ['cancel', (h: ReturnType<typeof harness>) => h.session.cancel(), 'cancelled'],
+  ['reset', (h: ReturnType<typeof harness>) => h.session.reset(), 'idle'],
+])(
+  '%s before a retry reaches its effect stops it with nothing written',
+  async (_case, interrupt, ends) => {
+    const { h, gate, retried } = await heldRetry();
+    interrupt(h);
+    gate.resolve();
+    await retried;
+    await flush();
+
+    expect(h.session.state().name).toBe(ends);
+    expect(h.calls).toHaveLength(1);
+  },
+);
+
+test('a new command before a retry reaches its effect cancels the retry with nothing written', async () => {
+  const { h, gate, retried } = await heldRetry([answering(unsupported)]);
+  const next = h.session.submit({ text: 'otra cosa', source: 'text' });
+  gate.resolve();
+  await retried;
+
+  expect((await next).name).toBe('unsupported');
+  expect(h.calls).toHaveLength(1);
+});
+
+test('a second retry in the same tick is refused and the first ends completed', async () => {
+  const api = lostFirstResponse();
+  const h = harness({
+    descriptor: keyedOrders,
+    responders: [answering(complete('p-1'))],
+    effect: api.effect,
+  });
+  await timedOut(h);
+
+  const first = h.session.retry();
+  const second = h.session.retry();
+
+  expect((await second).name).toBe('executing');
+  expect((await first).name).toBe('completed');
+  expect(h.session.state().name).toBe('completed');
+  expect(h.calls).toHaveLength(2);
+  expect(api.orders.size).toBe(1);
+  expect(h.announcements).toContainEqual(notAvailable);
+});
+
+test.each(['never', 'always'] as const)(
+  'retry after an abandoned undo of a completed write is refused (confirmation %s)',
+  async (confirmation) => {
+    let confirmations = 0;
+    const h = harness({
+      descriptor: {
+        ...ordersCreate,
+        confirmation,
+        reversibility: { kind: 'compensate', via: 'orders.cancel', windowMs: 60_000 },
+      },
+      responders: [answering(complete('p-1'))],
+      confirm: async () => {
+        confirmations += 1;
+        return 'confirmed';
+      },
+      compensate: hangingUntilAborted,
+    });
+    await h.session.submit({ text: 'pedido', source: 'text' });
+    const undone = h.session.undo('p-1');
+    await flush();
+    await h.clock.advance(10_000);
+    const abandoned = await undone;
+    const askedBefore = confirmations;
+
+    expect(abandoned).toEqual({ name: 'failed', failure: abortedFailure });
+    expect(await h.session.retry()).toBe(abandoned);
+    expect(h.calls).toHaveLength(1);
+    expect(confirmations).toBe(askedBefore);
+    expect(h.announcements.at(-1)).toEqual(notAvailable);
+  },
+);
+
+test('retry after an abandoned undo of an older plan never re-sends a failed forward write', async () => {
+  const h = harness({
+    responders: [answering(complete('p-0')), answering(complete('p-1'))],
+    descriptor: {
+      ...keyedOrders,
+      reversibility: { kind: 'compensate', via: 'orders.cancel', windowMs: 60_000 },
+    },
+    effect: async (_input, context) =>
+      context.planId === 'p-1'
+        ? new Promise(() => undefined)
+        : { ok: true, output: { orderId: 'o-0' } },
+    compensate: hangingUntilAborted,
+  });
+  await h.session.submit({ text: 'uno', source: 'text' });
+  expect((await timedOut(h)).name).toBe('failed');
+  const undone = h.session.undo('p-0');
+  await flush();
+  await h.clock.advance(10_000);
+  expect(await undone).toEqual({ name: 'failed', failure: abortedFailure });
+
+  expect((await h.session.retry()).name).toBe('failed');
+  expect(h.calls.map((call) => call.planId)).toEqual(['p-0', 'p-1']);
+  expect(h.announcements.at(-1)).toEqual(notAvailable);
 });
 
 test('cancel while presenting completes with presentation degraded ABORTED and still announces success', async () => {

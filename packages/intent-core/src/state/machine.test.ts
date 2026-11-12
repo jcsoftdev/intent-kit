@@ -90,6 +90,7 @@ const received = (interpretation: Received): SessionEvent => ({
 });
 const answer: SessionEvent = { type: 'answer.submitted' };
 const confirmation: SessionEvent = { type: 'confirmation.requested', planId: 'p1' };
+const retryStarted: SessionEvent = { type: 'retry.started', planId: 'p1' };
 const started: SessionEvent = { type: 'execution.started', planId: 'p1' };
 const sent = (cancellableAfterSend: boolean): SessionEvent => ({
   type: 'execution.sent',
@@ -108,6 +109,7 @@ const allEvents: readonly SessionEvent[] = [
   submitted,
   received(incomplete),
   answer,
+  retryStarted,
   confirmation,
   started,
   sent(true),
@@ -148,10 +150,11 @@ describe('transition table', () => {
       { name: 'unsupported', suggestions: ['a', 'b'] },
     ],
     [clarifying, answer, interpreting],
-    ...[interpreting, clarifying, failed].map(
+    ...[interpreting, clarifying, executingUnsent].map(
       (from): [SessionState, SessionEvent, SessionState] => [from, confirmation, awaiting],
     ),
-    ...[interpreting, clarifying, awaiting, failed].map(
+    [failed, retryStarted, executingUnsent],
+    ...[interpreting, clarifying, awaiting].map(
       (from): [SessionState, SessionEvent, SessionState] => [from, started, executingUnsent],
     ),
     [executingUnsent, sent(true), executingSentCancellable],
@@ -238,8 +241,11 @@ const EXPECTED_CHANGES: readonly string[] = [
   ),
   'interpreting+interpretation.received',
   'clarifying+answer.submitted',
-  ...['interpreting', 'clarifying', 'failed'].map((name) => `${name}+confirmation.requested`),
-  ...['interpreting', 'clarifying', 'awaitingConfirmation', 'failed'].map(
+  ...['interpreting', 'clarifying', 'executing(unsent)'].map(
+    (name) => `${name}+confirmation.requested`,
+  ),
+  'failed+retry.started',
+  ...['interpreting', 'clarifying', 'awaitingConfirmation'].map(
     (name) => `${name}+execution.started`,
   ),
   'executing(unsent)+execution.sent',
