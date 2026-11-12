@@ -530,6 +530,54 @@ test('an effect that never answers fails at the execute budget, retryable only w
   expect(failureOf(await naturalSettled)?.retryable).toBe(true);
 });
 
+test('a keyed write that timed out retries with the same plan and key, and its success is kept', async () => {
+  const written = new Set<string>();
+  let attempts = 0;
+  const h = harness({
+    mounted: ['my-order:o-1'],
+    descriptor: {
+      ...ordersCreate,
+      idempotency: { kind: 'key', carrier: 'header', field: 'Idempotency-Key' },
+    },
+    effect: async (_input, context) => {
+      attempts += 1;
+      if (attempts === 1) {
+        return new Promise(() => undefined);
+      }
+      written.add(context.idempotencyKey ?? '');
+      return { ok: true, output: orderOutput };
+    },
+  });
+  const timedOut = h.run();
+  await flush();
+  await h.clock.advance(10_000);
+  expect(failureOf(await timedOut)).toEqual({
+    stage: 'execution',
+    code: 'EXECUTION_FAILED',
+    retryable: true,
+  });
+
+  const retried = await h.run();
+  const replay = await h.run();
+
+  expect(retried.ok && retried.value.status).toBe('completed');
+  expect(replay).toBe(retried);
+  expect(h.calls.map((call) => call.idempotencyKey)).toEqual(['p-1', 'p-1']);
+  expect([...written]).toEqual(['p-1']);
+});
+
+test('a non-retryable failure is kept for its plan and never re-runs the effect', async () => {
+  const h = harness({
+    effect: async () => {
+      throw new Error('boom');
+    },
+  });
+  const first = await h.run();
+  const second = await h.run();
+  expect(second).toBe(first);
+  expect(h.calls).toHaveLength(1);
+});
+
 test('an effect that throws → EXECUTION_FAILED not retryable', async () => {
   const h = harness({
     effect: async () => {

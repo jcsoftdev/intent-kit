@@ -4,11 +4,19 @@ import type { ActionStage } from './action-pipeline.js';
 
 export const GUARD_STAGE = stageName('guard');
 
+const isWorthKeeping = (outcome: Outcome<ActionResult>): boolean =>
+  outcome.ok || !outcome.failure.retryable;
+
 export const createGuardStage = <TPrincipal, TRole extends string>(): ActionStage<
   TPrincipal,
   TRole
 > => {
   const outcomes = new Map<string, Promise<Outcome<ActionResult>>>();
+  const forget = (planId: string, run: Promise<Outcome<ActionResult>>): void => {
+    if (outcomes.get(planId) === run) {
+      outcomes.delete(planId);
+    }
+  };
   return {
     name: GUARD_STAGE,
     phase: 'execution',
@@ -20,9 +28,17 @@ export const createGuardStage = <TPrincipal, TRole extends string>(): ActionStag
       if (existing) {
         return existing;
       }
-      const first = next();
-      outcomes.set(planId, first);
-      return first;
+      const run = next();
+      outcomes.set(planId, run);
+      run.then(
+        (outcome) => {
+          if (!isWorthKeeping(outcome)) {
+            forget(planId, run);
+          }
+        },
+        () => forget(planId, run),
+      );
+      return run;
     },
   };
 };
