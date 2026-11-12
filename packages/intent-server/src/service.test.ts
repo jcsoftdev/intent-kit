@@ -806,6 +806,29 @@ describe('interpretation service', () => {
       expect(linesOf(outcome)).toEqual([{ offeringId: 'dish-chicha', quantity: 2 }]);
     });
 
+    test('a resolver error while checking the chosen label fails the interpretation', async () => {
+      const { service } = numbered(CHICHA_MENU, {
+        tables: [TERRACE_TABLE, HALL_TABLE],
+        dishResolver: failingOn(
+          DISPLAY_LABELS['dish-chicha'] ?? '',
+          withDisplayLabels(resolverOf('dish', CHICHA_MENU), DISPLAY_LABELS),
+        ),
+      });
+      const asked = await service.interpret(waiter, utterance('dos chicha para la mesa 3'), {
+        signal,
+      });
+      expect(new Set(candidatePathsOf(asked))).toEqual(new Set(['lines[0].offeringId']));
+      const outcome = await service.interpret(
+        waiter,
+        continuation(draftInputOf(asked), { 'lines[0].offeringId': 'dish-chicha' }),
+        { signal },
+      );
+      expect(outcome).toEqual({
+        ok: false,
+        failure: { stage: 'resolution', code: 'RESOLUTION_UNAVAILABLE', retryable: true },
+      });
+    });
+
     test('a forged written-back quantity is only a quantity the client could write anyway', async () => {
       const { service } = numbered(CHICHA_MENU, { tables: [TERRACE_TABLE, HALL_TABLE] });
       const complete = async (offeringId: string) =>
