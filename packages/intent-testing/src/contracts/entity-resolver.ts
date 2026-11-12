@@ -22,6 +22,9 @@ export interface EntityResolverContractFixture<TPrincipal> {
   readonly foreign: { readonly principal: TPrincipal; readonly hiddenIds: readonly string[] };
 }
 
+const LABEL_ROUND_TRIP =
+  'labels should resolve back to their own id; when one does not, an answered number-word pick is written back as the spoken text and may be asked again';
+
 const queryFor = (text: string): EntityQuery => ({ text, hints: {}, scope: 'any' });
 
 const idsIn = (resolution: EntityResolution): readonly string[] => {
@@ -44,7 +47,7 @@ export function describeEntityResolverContract<TPrincipal>(
   name: string,
   factory: () => EntityResolverContractFixture<TPrincipal>,
 ): void {
-  describe(`${name} entity resolver contract`, () => {
+  describe(`${name} entity resolver contract (${LABEL_ROUND_TRIP})`, () => {
     const signal = new AbortController().signal;
 
     it('resolves the exact text to found with the expected id', async () => {

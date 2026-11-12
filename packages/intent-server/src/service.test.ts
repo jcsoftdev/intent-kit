@@ -308,6 +308,31 @@ const FOUR_CHEESE_MENU: readonly EntityRecord[] = [
   { id: 'dish-pizza-4-quesos', label: 'Pizza cuatro quesos' },
 ];
 
+const DISPLAY_LABELS: Readonly<Record<string, string>> = {
+  'dish-chicha': 'Bebida #12',
+  'dish-chicha-2l': 'Bebida #13',
+};
+
+const displayed =
+  (labels: Readonly<Record<string, string>>) =>
+  (option: ClosedOption): ClosedOption => ({ ...option, label: labels[option.id] ?? option.label });
+
+const withDisplayLabels = (
+  resolver: EntityResolver<Principal>,
+  labels: Readonly<Record<string, string>>,
+): EntityResolver<Principal> => ({
+  ...resolver,
+  async resolve(principal, query, options) {
+    const resolution = await resolver.resolve(principal, query, options);
+    if (resolution.status === 'found') {
+      return { ...resolution, label: labels[resolution.id] ?? resolution.label };
+    }
+    return resolution.status === 'choices'
+      ? { status: 'choices', options: resolution.options.map(displayed(labels)) }
+      : { status: 'notFound', nearest: resolution.nearest.map(displayed(labels)) };
+  },
+});
+
 const failingOn = (
   text: string,
   resolver: EntityResolver<Principal>,
@@ -698,6 +723,87 @@ describe('interpretation service', () => {
         expect(outcome).toMatchObject({ ok: true, value: { status: 'complete' } });
         expect(linesOf(outcome)).toEqual([line]);
       });
+    });
+
+    describe.each([
+      [
+        'dish-chicha',
+        { offeringId: 'chicha', quantity: 2 },
+        { offeringId: 'dish-chicha', quantity: 2 },
+      ],
+      ['dish-chicha-2l', { offeringId: 'dos chicha' }, { offeringId: 'dish-chicha-2l' }],
+    ])('with display labels that do not resolve back, answering %s', (dishId, written, line) => {
+      const answeredDish = async () => {
+        const { service } = numbered(CHICHA_MENU, {
+          tables: [TERRACE_TABLE, HALL_TABLE],
+          dishResolver: withDisplayLabels(resolverOf('dish', CHICHA_MENU), DISPLAY_LABELS),
+        });
+        const asked = await service.interpret(waiter, utterance('dos chicha para la mesa 3'), {
+          signal,
+        });
+        expect(new Set(candidatePathsOf(asked))).toEqual(new Set(['lines[0].offeringId']));
+        const tableAsked = await service.interpret(
+          waiter,
+          continuation(draftInputOf(asked), { 'lines[0].offeringId': dishId }),
+          { signal },
+        );
+        expect(new Set(candidatePathsOf(tableAsked))).toEqual(new Set(['tableId']));
+        return { service, tableAsked };
+      };
+
+      const completeWith = async (answers: Readonly<Record<string, string>>) => {
+        const { service, tableAsked } = await answeredDish();
+        return service.interpret(
+          waiter,
+          continuation(draftInputOf(tableAsked), { ...answers, tableId: 'tbl-salon-3' }),
+          { signal },
+        );
+      };
+
+      test('writes the spoken reading back instead of the display label', async () => {
+        const { tableAsked } = await answeredDish();
+        expect(linesOf(tableAsked)).toEqual([written]);
+      });
+
+      test('completes the same order when the client sends every earlier answer', async () => {
+        const outcome = await completeWith({ 'lines[0].offeringId': dishId });
+        expect(outcome).toMatchObject({ ok: true, value: { status: 'complete' } });
+        expect(linesOf(outcome)).toEqual([line]);
+      });
+
+      test('never resolves another dish when the client sends only the table answer', async () => {
+        const outcome = await completeWith({});
+        const settled =
+          outcome.ok && outcome.value.status === 'ambiguous'
+            ? new Set(candidatePathsOf(outcome))
+            : linesOf(outcome);
+        expect([[line], new Set(['lines[0].offeringId'])]).toContainEqual(settled);
+      });
+    });
+
+    test('a display label is never written when it resolves to another id', async () => {
+      const { service } = numbered(CHICHA_MENU, {
+        tables: [TERRACE_TABLE, HALL_TABLE],
+        dishResolver: withDisplayLabels(resolverOf('dish', CHICHA_MENU), {
+          'dish-chicha': 'Chicha 2 litros',
+          'dish-chicha-2l': 'Chicha',
+        }),
+      });
+      const asked = await service.interpret(waiter, utterance('dos chicha para la mesa 3'), {
+        signal,
+      });
+      const tableAsked = await service.interpret(
+        waiter,
+        continuation(draftInputOf(asked), { 'lines[0].offeringId': 'dish-chicha' }),
+        { signal },
+      );
+      expect(linesOf(tableAsked)).toEqual([{ offeringId: 'chicha', quantity: 2 }]);
+      const outcome = await service.interpret(
+        waiter,
+        continuation(draftInputOf(tableAsked), { tableId: 'tbl-salon-3' }),
+        { signal },
+      );
+      expect(linesOf(outcome)).toEqual([{ offeringId: 'dish-chicha', quantity: 2 }]);
     });
 
     test('a forged written-back quantity is only a quantity the client could write anyway', async () => {

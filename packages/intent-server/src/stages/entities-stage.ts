@@ -88,6 +88,7 @@ type PathResult =
       readonly label: string;
       readonly reading?: SplitReading;
       readonly answered?: boolean;
+      readonly labelRoundTrips?: boolean;
     }
   | { readonly kind: 'ambiguous'; readonly options: readonly ClosedOption[] }
   | { readonly kind: 'skipped' }
@@ -285,7 +286,7 @@ const ambiguityAt = (
 });
 
 const decidedText = (split: NumberSplit, result: ResolvedPath): string => {
-  if (result.answered === true) {
+  if (result.answered === true && result.labelRoundTrips === true) {
     return result.label;
   }
   return result.reading === 'counted' ? split.rest : split.whole;
@@ -393,9 +394,19 @@ export const createEntitiesStage = <TPrincipal>(config: {
           { reading: 'counted', lookup: byCount },
           { reading: 'named', lookup: byName },
         ];
-        return answer === undefined
-          ? chooseAmongReadings(split, readings, keyOf)
-          : answerAmongReadings(split, readings, answer, keyOf);
+        if (answer === undefined) {
+          return chooseAmongReadings(split, readings, keyOf);
+        }
+        const chosen = answerAmongReadings(split, readings, answer, keyOf);
+        if (chosen.kind !== 'resolved') {
+          return chosen;
+        }
+        const relabelled = await lookUp(resolver, chosen.label, item.path, item.param, resolved);
+        if (relabelled.kind === 'failed') {
+          return relabelled;
+        }
+        const labelRoundTrips = relabelled.kind === 'found' && relabelled.option.id === chosen.id;
+        return { ...chosen, labelRoundTrips };
       };
       const resolveAt = async (
         input: unknown,
