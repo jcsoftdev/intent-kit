@@ -9,3 +9,4 @@ export * from './speech.js';
 export * from './events.js';
 export * from './effect.js';
 export * from './form-binding.js';
+export * from './compensator.js';

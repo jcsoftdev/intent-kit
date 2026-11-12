@@ -1,7 +1,8 @@
-import { foldText, type InterpretRequest } from '@jcsoftdev/intent-core';
+import { foldText, type AnyDescriptor, type InterpretRequest } from '@jcsoftdev/intent-core';
 import { createZodSchemaAdapter } from '@jcsoftdev/intent-zod';
 import { z } from 'zod';
 import {
+  describeCompensatorContract,
   describeEffectContract,
   describeEntityResolverContract,
   describeInterpreterContract,
@@ -10,6 +11,7 @@ import {
   describeSpeechSourceContract,
 } from './contracts/index.js';
 import {
+  createFakeCompensator,
   createFakeEffect,
   createFakeInterpreter,
   createFakeRouter,
@@ -84,6 +86,41 @@ describeEffectContract<{ readonly note: string }>('fake', () => {
     }),
     input: { note: 'hola' },
     sideEffects: () => executed,
+  };
+});
+
+const ordersCreate: AnyDescriptor = {
+  id: 'orders.create',
+  version: 1,
+  kind: 'write',
+  agent: 'allowed',
+  description: 'Create an order',
+  aliases: [],
+  examples: [],
+  patterns: [],
+  scope: 'global',
+  input: z.object({}),
+  entities: [],
+  risk: 'write',
+  confirmation: 'never',
+  reversibility: { kind: 'compensate', via: 'orders.cancel', windowMs: 5000 },
+  idempotency: { kind: 'key', carrier: 'body', field: 'idempotencyKey' },
+  roles: ['waiter'],
+};
+
+describeCompensatorContract('fake', () => {
+  const compensator = createFakeCompensator();
+  return {
+    compensator,
+    request: {
+      planId: 'contract-plan',
+      idempotencyKey: 'contract-plan:undo',
+      via: 'orders.cancel',
+      descriptor: ordersCreate,
+      input: {},
+      output: { orderId: 'o-1' },
+    },
+    sideEffects: () => compensator.applied().length,
   };
 });
 

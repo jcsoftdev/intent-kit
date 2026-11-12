@@ -14,6 +14,11 @@ interface Slot {
   inflight?: Promise<EffectResult<unknown>>;
 }
 
+interface LateSettle {
+  readonly result: EffectResult<unknown>;
+  readonly expiresAt: number;
+}
+
 const stalePlan: EffectResult<unknown> = {
   ok: false,
   failure: { stage: 'execution', code: 'STALE_PLAN', retryable: false },
@@ -32,6 +37,7 @@ export const createUndoRegistry = (
   const clock = options.clock ?? systemClock;
   const events = options.events ?? noopEventBus;
   const slots = new Map<string, Slot>();
+  const lateSettles = new Map<string, LateSettle>();
 
   const emit = (
     type: 'undo.offered' | 'undo.executed' | 'undo.expired',
@@ -48,6 +54,21 @@ export const createUndoRegistry = (
         emit('undo.expired', slot.offer);
       }
     }
+    for (const [planId, late] of [...lateSettles]) {
+      if (late.expiresAt <= now) {
+        lateSettles.delete(planId);
+      }
+    }
+  };
+
+  const rememberIfAbandoned = (
+    offer: UndoOffer,
+    result: EffectResult<unknown>,
+    signal: AbortSignal,
+  ): void => {
+    if (signal.aborted) {
+      lateSettles.set(offer.planId, { result, expiresAt: offer.expiresAt });
+    }
   };
 
   const execute = async (slot: Slot, signal: AbortSignal): Promise<EffectResult<unknown>> => {
@@ -55,6 +76,7 @@ export const createUndoRegistry = (
       const result = await slot.offer.undo({ signal });
       if (result.ok && slots.get(slot.offer.planId) === slot) {
         slots.delete(slot.offer.planId);
+        rememberIfAbandoned(slot.offer, result, signal);
         emit('undo.executed', slot.offer);
       }
       return result;
@@ -82,7 +104,7 @@ export const createUndoRegistry = (
       dropExpired();
       const slot = slots.get(planId);
       if (!slot) {
-        return stalePlan;
+        return lateSettles.get(planId)?.result ?? stalePlan;
       }
       slot.inflight ??= execute(slot, signal);
       return slot.inflight;

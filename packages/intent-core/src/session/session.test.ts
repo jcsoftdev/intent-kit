@@ -795,6 +795,54 @@ test('an undo that never settles fails retryable at its budget, keeps the offer 
   expect(h.kit.undo.active().map((entry) => entry.planId)).toEqual(['p-1']);
 });
 
+test('a retry after an undo abandoned at its budget never compensates twice and reports the late success', async () => {
+  const late = deferred<EffectResult<unknown>>();
+  const h = harness({
+    descriptor: {
+      ...ordersCreate,
+      reversibility: { kind: 'compensate', via: 'orders.cancel', windowMs: 60_000 },
+    },
+    responders: [answering(complete('p-1'))],
+    compensate: () => late.promise,
+  });
+  await h.session.submit({ text: 'uno', source: 'text' });
+  const abandoned = h.session.undo('p-1');
+  await flush();
+  await h.clock.advance(10_000);
+  expect((await abandoned).name).toBe('failed');
+
+  late.resolve({ ok: true, output: null });
+  await flush();
+  expect(h.kit.undo.active()).toEqual([]);
+
+  expect(await h.session.undo('p-1')).toEqual({ name: 'undone', planId: 'p-1' });
+  expect(h.compensations).toHaveLength(1);
+});
+
+test('a retry while an abandoned undo is still in flight waits for it instead of compensating again', async () => {
+  const late = deferred<EffectResult<unknown>>();
+  const h = harness({
+    descriptor: {
+      ...ordersCreate,
+      reversibility: { kind: 'compensate', via: 'orders.cancel', windowMs: 60_000 },
+    },
+    responders: [answering(complete('p-1'))],
+    compensate: () => late.promise,
+  });
+  await h.session.submit({ text: 'uno', source: 'text' });
+  const abandoned = h.session.undo('p-1');
+  await flush();
+  await h.clock.advance(10_000);
+  await abandoned;
+
+  const retry = h.session.undo('p-1');
+  await flush();
+  late.resolve({ ok: true, output: null });
+
+  expect(await retry).toEqual({ name: 'undone', planId: 'p-1' });
+  expect(h.compensations).toHaveLength(1);
+});
+
 test('cancel during undoing aborts the undo signal and ends failed ABORTED', async () => {
   const h = harness({ responders: [answering(complete('p-1'))], compensate: hangingUntilAborted });
   await h.session.submit({ text: 'uno', source: 'text' });

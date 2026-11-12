@@ -3,6 +3,7 @@ import type {
   ActionLifecycle,
   ActionResult,
   AnyDescriptor,
+  CompensationRequest,
   ConfirmationPort,
   ConfirmationRequest,
   Destination,
@@ -122,7 +123,7 @@ const harness = (options: Options = {}) => {
   const revealed: string[] = [];
   const announcements: { message: string; politeness: string }[] = [];
   const confirmations: ConfirmationRequest[] = [];
-  const compensations: unknown[] = [];
+  const compensations: CompensationRequest[] = [];
   let route = options.route;
   const mounted = new Set(options.mounted ?? []);
   const keyOf = (ref: TargetRef): string => `${ref.intent}:${ref.key ?? ''}`;
@@ -215,7 +216,7 @@ const harness = (options: Options = {}) => {
       ? {
           compensator: {
             async compensate(request) {
-              compensations.push(request.via);
+              compensations.push(request);
               return { ok: true, output: null };
             },
           },
@@ -506,7 +507,9 @@ test('compensate with a window offers an undo entry that calls the compensator',
     expiresAt: 5000,
   });
   await h.undo.undo('p-1', { signal: new AbortController().signal });
-  expect(h.compensations).toEqual(['orders.cancel']);
+  expect(h.compensations).toMatchObject([
+    { via: 'orders.cancel', planId: 'p-1', idempotencyKey: 'p-1:undo', output: orderOutput },
+  ]);
 });
 
 test('an effect that never answers fails at the execute budget, retryable only with idempotency', async () => {

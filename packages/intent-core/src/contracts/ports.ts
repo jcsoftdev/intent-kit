@@ -173,6 +173,8 @@ export interface UndoRegistry {
 }
 
 export interface CompensationRequest {
+  readonly planId: string;
+  readonly idempotencyKey: string;
   readonly via: string;
   readonly descriptor: AnyDescriptor;
   readonly input: unknown;

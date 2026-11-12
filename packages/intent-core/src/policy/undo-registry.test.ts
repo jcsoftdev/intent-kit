@@ -97,3 +97,57 @@ test('the Unregister removes the entry and is idempotent', () => {
   unregister();
   expect(registry.active()).toEqual([]);
 });
+
+const lateOffer = (
+  base: UndoOffer,
+  settle: Promise<EffectResult<unknown>>,
+  calls: { count: number },
+): UndoOffer => ({
+  ...base,
+  undo: async () => {
+    calls.count += 1;
+    return settle;
+  },
+});
+
+test('a retry while an abandoned undo is still in flight joins it and compensates once', async () => {
+  const { registry, offer } = setup();
+  const calls = { count: 0 };
+  let settle: (result: EffectResult<unknown>) => void = () => undefined;
+  const pending = new Promise<EffectResult<unknown>>((resolve) => {
+    settle = resolve;
+  });
+  registry.offer(lateOffer(offer(), pending, calls));
+  const abandoned = new AbortController();
+  const first = registry.undo('p1', { signal: abandoned.signal });
+  abandoned.abort();
+  const retry = registry.undo('p1', { signal });
+  settle({ ok: true, output: null });
+  expect(await first).toEqual({ ok: true, output: null });
+  expect(await retry).toEqual({ ok: true, output: null });
+  expect(calls.count).toBe(1);
+});
+
+test('a late ok after an abandoned undo consumes the offer and a retry answers ok without compensating again', async () => {
+  const { registry, seen, offer } = setup();
+  const calls = { count: 0 };
+  registry.offer(lateOffer(offer(), Promise.resolve({ ok: true, output: null }), calls));
+  const abandoned = new AbortController();
+  abandoned.abort();
+  await registry.undo('p1', { signal: abandoned.signal });
+  expect(registry.active()).toEqual([]);
+  expect(seen).toEqual(['undo.offered', 'undo.executed']);
+
+  expect(await registry.undo('p1', { signal })).toEqual({ ok: true, output: null });
+  expect(calls.count).toBe(1);
+});
+
+test('a remembered late settle is forgotten when its window closes', async () => {
+  const { clock, registry, offer } = setup();
+  const calls = { count: 0 };
+  registry.offer(lateOffer(offer(), Promise.resolve({ ok: true, output: null }), calls));
+  await registry.undo('p1', { signal: AbortSignal.abort() });
+  await clock.advance(5000);
+  expect(await registry.undo('p1', { signal })).toEqual(stale);
+  expect(calls.count).toBe(1);
+});

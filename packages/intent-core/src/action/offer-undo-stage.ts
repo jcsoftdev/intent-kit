@@ -1,9 +1,17 @@
 import { stageName } from '../contracts/index.js';
-import type { Clock, Compensator, UndoEntry, UndoRegistry } from '../contracts/index.js';
+import type {
+  Clock,
+  CompensationRequest,
+  Compensator,
+  UndoEntry,
+  UndoRegistry,
+} from '../contracts/index.js';
 import type { ActionStage } from './action-pipeline.js';
 import { isHandoff } from './load-effect-stage.js';
 
 export const OFFER_UNDO_STAGE = stageName('offerUndo');
+
+const compensationKeyOf = (planId: string): string => `${planId}:undo`;
 
 export interface OfferUndoDependencies {
   readonly clock: Clock;
@@ -31,13 +39,16 @@ export const createOfferUndoStage = <TPrincipal, TRole extends string>(
     ) {
       return next();
     }
+    const { planId } = context.get('plan');
     const entry: UndoEntry = {
-      planId: context.get('plan').planId,
+      planId,
       capabilityId: descriptor.id,
       kind: 'compensate',
       expiresAt: dependencies.clock.now() + reversibility.windowMs,
     };
-    const request = {
+    const request: CompensationRequest = {
+      planId,
+      idempotencyKey: compensationKeyOf(planId),
       via: reversibility.via,
       descriptor,
       input: context.get('input'),
