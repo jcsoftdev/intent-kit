@@ -1,9 +1,5 @@
 name: release
 
-# Publishes the packages listed in .github/publish-packages.json to npm when a tag v<version> is
-# pushed. Authenticates with npm trusted publishing (OIDC, configured on npmjs.com for this repo
-# and workflow): no token.
-
 on:
   push:
     tags: ['v*']
@@ -20,9 +16,9 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v4.2.2
+      - uses: pnpm/action-setup@v4.1.0
+      - uses: actions/setup-node@v4.4.0
         with:
           node-version-file: .nvmrc
           cache: pnpm
@@ -37,13 +33,9 @@ jobs:
           } >> "$GITHUB_OUTPUT"
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
-      - name: Upgrade npm (trusted publishing needs npm 11.5.1 or later)
-        run: npm install -g npm@latest
-      - name: Publish enabled packages
-        # .github/publish-packages.json lists the packages to publish, in dependency order. Configure
-        # each package's trusted publisher on npmjs.com first (repo jcsoftdev/intent-kit, workflow
-        # release.yml). pnpm pack rewrites workspace: specifiers; npm publish of the tarball keeps
-        # OIDC trusted publishing and provenance.
+      - name: Install npm 11.5.1 (trusted publishing needs 11.5.1 or later)
+        run: npm install -g npm@11.5.1
+      - name: Publish enabled packages with provenance through OIDC trusted publishing
         run: |
           set -euo pipefail
           while read -r dir; do
@@ -54,6 +46,7 @@ jobs:
               echo "$name@$version is already published, skipping"
               continue
             fi
+            (cd "$dir" && pnpm run prepublishOnly)
             tarball_dir=$(mktemp -d)
             (cd "$dir" && pnpm pack --pack-destination "$tarball_dir")
             npm publish "$tarball_dir"/*.tgz --access public --provenance
