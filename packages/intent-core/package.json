@@ -25,7 +25,8 @@
   ],
   "scripts": {
     "build": "rm -rf dist && tsc -p tsconfig.build.json",
-    "typecheck": "tsc -p tsconfig.json"
+    "typecheck": "tsc -p tsconfig.json",
+    "prepublishOnly": "node ../../scripts/assert-ci-publish.mjs"
   },
   "publishConfig": {
     "access": "public"

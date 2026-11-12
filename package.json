@@ -16,7 +16,7 @@
   "scripts": {
     "build": "pnpm -r --filter \"./packages/*\" --filter \"./apps/*\" build",
     "typecheck": "pnpm -r typecheck",
-    "test": "vitest run && node --test scripts/boundaries.test.mjs scripts/release-plan.test.mjs",
+    "test": "vitest run && node --test scripts/boundaries.test.mjs scripts/release-plan.test.mjs scripts/assert-ci-publish.test.mjs",
     "format": "prettier --write \"**/*.{ts,mjs,json,md,yml}\"",
     "format:check": "prettier --check \"**/*.{ts,mjs,json,md,yml}\"",
     "check:boundaries": "node scripts/check-boundaries.mjs",

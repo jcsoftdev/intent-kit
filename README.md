@@ -103,6 +103,10 @@ Patterns make common commands deterministic and skip the LLM:
 - A numeric slot right before an entity slot (`{quantity?} {dish}`) is read both ways ("tres leches" is three "leches" or one "Tres leches") and never swapped silently.
 - An unknown slot, a slot that names two paths, or two patterns that put different numeric slots before the same entity fail at construction (`INVALID_SLOT`, `AMBIGUOUS_SLOT`, `INVALID_PATTERN`).
 
+## Releasing
+
+Versions move in lockstep. Pushing a `v<version>` tag runs `.github/workflows/release.yml`, which checks the tag against the package versions and publishes the packages listed in `.github/publish-packages.json` with npm provenance through GitHub OIDC trusted publishing. A `prepublishOnly` guard in every package refuses `npm publish` and `pnpm publish` from anywhere but GitHub Actions.
+
 ## Stability
 
 The packages are `0.x`. Exported helpers beyond the documented factories and ports may change between minor versions.
