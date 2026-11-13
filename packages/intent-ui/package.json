@@ -1,6 +1,6 @@
 {
   "name": "@jcsoftdev/intent-ui",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Ready-made assistant components for the intent kit on top of @jcsoftdev/ui.",
   "author": "jcsoftdev",
   "license": "MIT",
