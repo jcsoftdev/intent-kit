@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { webSpeechAvailability } from './privacy-mode.js';
-import { ScriptedRecognition } from './scripted-recognition.js';
+import { ScriptedRecognition } from '../test/scripted-recognition.js';
 import { createWebSpeechSource } from './web-speech-source.js';
 import type { SpeechPrivacyMode } from './privacy-mode.js';
 

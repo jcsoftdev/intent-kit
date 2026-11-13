@@ -1,6 +1,6 @@
 import { describeSpeechSourceContract } from '@jcsoftdev/intent-testing/contracts';
 import { describe, expect, it } from 'vitest';
-import { resultOf, ScriptedRecognition } from './scripted-recognition.js';
+import { resultOf, ScriptedRecognition } from '../test/scripted-recognition.js';
 import { SpeechCaptureError, type SpeechErrorReason } from './speech-errors.js';
 import { createWebSpeechSource } from './web-speech-source.js';
 

@@ -2,7 +2,7 @@ import type {
   RecognitionLike,
   RecognitionResultEventLike,
   RecognitionResultLike,
-} from './recognition-types.js';
+} from '../src/recognition-types.js';
 
 export const resultOf = (transcript: string, isFinal: boolean): RecognitionResultLike =>
   Object.assign([{ transcript }], { isFinal });
