@@ -56,12 +56,14 @@ describe('compilePattern', () => {
     expect(performance.now() - started).toBeLessThan(50);
   });
 
-  test.each(['{a} {b} listo', '{a} {b} {c} {d} listo', '{a} {quantity?} {b} listo', '(a|{x}) {y}'])(
-    'adjacent text slots or slots in alternations in %j throw INVALID_PATTERN',
-    (template) => {
-      expect(() => compilePattern(template, kindOf)).toThrow('INVALID_PATTERN');
-    },
-  );
+  test.each([
+    '{a} {b} listo',
+    '{a} {b} {c} {d} listo',
+    '{a} {quantity?} {quantity2?} {b} listo',
+    '(a|{x}) {y}',
+  ])('adjacent text slots or slots in alternations in %j throw INVALID_PATTERN', (template) => {
+    expect(() => compilePattern(template, kindOf)).toThrow('INVALID_PATTERN');
+  });
 
   test('a literal between text slots is accepted', () => {
     expect(() => compilePattern('{a} con {b} listo', kindOf)).not.toThrow();
@@ -157,6 +159,104 @@ describe('compilePattern', () => {
       });
       expect(reserve.pairs).toEqual([]);
       expect(reserve.splits('reserva terraza para tres personas')).toEqual([]);
+    });
+  });
+
+  describe('a number slot between two text slots', () => {
+    const words = new Map([
+      ['un', 1],
+      ['dos', 2],
+      ['tres', 3],
+    ]);
+    const kinds = (slot: string): SlotKind => (slot === 'quantity' ? 'number' : 'text');
+    const normalize = createNormalizer();
+    const optional = compilePattern('mesa {table} {quantity?} {dish}', kinds, normalize, words);
+    const required = compilePattern('mesa {table} {quantity} {dish}', kinds, normalize, words);
+    const punctuated = compilePattern('mesa {table}, {quantity?} {dish}', kinds, normalize, words);
+
+    test.each([
+      ['mesa 4 dos lomos', { table: '4', quantity: '2', dish: 'lomos' }],
+      ['mesa 4 2 lomos saltados', { table: '4', quantity: '2', dish: 'lomos saltados' }],
+      ['mesa 4 lomo saltado', { table: '4', dish: 'lomo saltado' }],
+      ['mesa 4 dos tres leches', { table: '4', quantity: '2', dish: 'tres leches' }],
+      ['mesa terraza 4 dos lomos', { table: 'terraza', quantity: '4', dish: 'dos lomos' }],
+      ['mesa 4 dos', { table: '4', dish: 'dos' }],
+    ])('optional quantity: %j', (utterance, expected) => {
+      expect(optional.match(normalize(utterance))).toEqual(expected);
+    });
+
+    test.each([
+      ['mesa 4, dos lomos', { table: '4', quantity: '2', dish: 'lomos' }],
+      ['Mesa 4, lomo saltado.', { table: '4', dish: 'lomo saltado' }],
+      ['mesa 4; 3 anticuchos', { table: '4', quantity: '3', dish: 'anticuchos' }],
+      ['mesa 4 dos lomos', { table: '4', quantity: '2', dish: 'lomos' }],
+    ])('comma in the pattern and %j', (utterance, expected) => {
+      expect(punctuated.match(normalize(utterance))).toEqual(expected);
+    });
+
+    test('a required quantity is mandatory', () => {
+      expect(required.match('mesa 4 dos lomos')).toEqual({
+        table: '4',
+        quantity: '2',
+        dish: 'lomos',
+      });
+      expect(required.match('mesa 4 lomo saltado')).toBeUndefined();
+    });
+
+    test('the text slot ends at the first number token after its first token', () => {
+      expect(optional.match('mesa terraza 4 dos lomos')).toEqual({
+        table: 'terraza',
+        quantity: '4',
+        dish: 'dos lomos',
+      });
+      expect(required.match('mesa terraza norte 4 lomos')).toEqual({
+        table: 'terraza norte',
+        quantity: '4',
+        dish: 'lomos',
+      });
+    });
+
+    test('the quantity pairs with the dish and splits it', () => {
+      expect(optional.pairs).toEqual([{ numberSlot: 'quantity', textSlot: 'dish' }]);
+      expect(optional.splits('mesa 4 dos lomos')).toEqual([
+        { textSlot: 'dish', whole: 'dos lomos' },
+      ]);
+    });
+
+    test('punctuation between slots is whitespace in both the pattern and the utterance', () => {
+      const separated = compilePattern('mesa {table}. para; {dish}; listo', kinds);
+      expect(separated.match('mesa 4, para lomo listo')).toEqual({ table: '4', dish: 'lomo' });
+      expect(separated.template).toBe('mesa {table}. para; {dish}; listo');
+    });
+
+    test('a slot name keeps its dots and brackets', () => {
+      expect(compilePattern('mesa {order.table}, con {dish}', kinds).slots).toEqual([
+        'order.table',
+        'dish',
+      ]);
+    });
+
+    test.each(['{a} {quantity} {quantity2} {b}', '{a} {b} {quantity?} {c}'])(
+      '%j throws INVALID_PATTERN',
+      (template) => {
+        const numbers = (slot: string): SlotKind =>
+          slot.startsWith('quantity') ? 'number' : 'text';
+        expect(() => compilePattern(template, numbers)).toThrow('INVALID_PATTERN');
+      },
+    );
+
+    test('a pattern with no number between text slots keeps its lazy capture', () => {
+      const reserve = compilePattern('reserva {table} {quantity}', kinds, normalize, words);
+      expect(reserve.match('reserva 4 5 6')).toEqual({ table: '4 5', quantity: '6' });
+    });
+
+    test('500 characters settle within 50 ms', () => {
+      const started = performance.now();
+      expect(optional.match(`mesa ${'x '.repeat(248)}`.trim())).toEqual({
+        table: 'x',
+        dish: 'x '.repeat(247).trim(),
+      });
+      expect(performance.now() - started).toBeLessThan(50);
     });
   });
 });

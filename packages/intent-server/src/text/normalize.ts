@@ -105,3 +105,29 @@ export const createMatchKey = (
   const words = numberWordsOf(rules);
   return (text) => replaceNumberWords(normalize(text), words);
 };
+
+const PLURAL_ES_AFTER_N = /[aeiou]nes$/;
+const MIN_PLURAL_LENGTH = 4;
+const INVARIANT_PLURAL_LIKE: ReadonlySet<string> = new Set([
+  'tres',
+  'gas',
+  'mas',
+  'menos',
+  'pues',
+  'lunes',
+  'martes',
+  'miercoles',
+  'jueves',
+  'viernes',
+]);
+
+export const foldSpanishPlural = (token: string): string => {
+  if (
+    !token.endsWith('s') ||
+    token.length < MIN_PLURAL_LENGTH ||
+    INVARIANT_PLURAL_LIKE.has(token)
+  ) {
+    return token;
+  }
+  return PLURAL_ES_AFTER_N.test(token) ? token.slice(0, -2) : token.slice(0, -1);
+};
