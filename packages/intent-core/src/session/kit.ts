@@ -39,6 +39,7 @@ export interface IntentKit {
 const detachedLifecycle = (signal: AbortSignal): ActionLifecycle => ({
   confirming: () => undefined,
   executing: () => undefined,
+  graceFlush: () => new AbortController().signal,
   sending: () => undefined,
   presenting: () => signal,
 });

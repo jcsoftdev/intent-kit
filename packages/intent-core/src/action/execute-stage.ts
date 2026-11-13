@@ -57,12 +57,13 @@ const waitForGrace = async (
   dependencies: Pick<ExecuteDependencies<unknown>, 'clock' | 'undo'>,
   plan: ExecutablePlan,
   descriptor: AnyDescriptor,
-  signal: AbortSignal,
+  signals: { readonly run: AbortSignal; readonly flush: () => AbortSignal },
 ): Promise<GraceOutcome> => {
   const { reversibility } = descriptor;
   if (reversibility.kind !== 'grace') {
     return 'elapsed';
   }
+  const flush = signals.flush();
   const cancel = new AbortController();
   let elapsed = false;
   const unregister = dependencies.undo?.offer({
@@ -71,23 +72,33 @@ const waitForGrace = async (
     kind: 'grace',
     expiresAt: dependencies.clock.now() + reversibility.delayMs,
     undo: async () => {
-      if (elapsed) {
+      if (elapsed || flush.aborted) {
         return { ok: false, failure: stalePlan };
       }
       cancel.abort();
       return { ok: true, output: null };
     },
   });
-  try {
-    await dependencies.clock.delay(reversibility.delayMs, {
-      signal: AbortSignal.any([signal, cancel.signal]),
-    });
+  const endWindow = (): GraceOutcome => {
     elapsed = true;
     unregister?.();
     return 'elapsed';
+  };
+  try {
+    await dependencies.clock.delay(reversibility.delayMs, {
+      signal: AbortSignal.any([signals.run, cancel.signal, flush]),
+    });
+    return endWindow();
   } catch (error) {
-    if (cancel.signal.aborted && !signal.aborted) {
+    if (signals.run.aborted) {
+      unregister?.();
+      throw error;
+    }
+    if (cancel.signal.aborted) {
       return 'undone';
+    }
+    if (flush.aborted) {
+      return endWindow();
     }
     unregister?.();
     throw error;
@@ -137,7 +148,11 @@ export const createExecuteStage = <TPrincipal, TRole extends string>(
     }
     const plan = context.get('plan');
     const descriptor = context.get('descriptor');
-    const grace = await waitForGrace(dependencies, plan, descriptor, context.signal);
+    const lifecycle = context.get('lifecycle');
+    const grace = await waitForGrace(dependencies, plan, descriptor, {
+      run: context.signal,
+      flush: () => lifecycle.graceFlush(plan.planId),
+    });
     if (grace === 'undone') {
       return {
         ok: true,
@@ -152,9 +167,7 @@ export const createExecuteStage = <TPrincipal, TRole extends string>(
     if (!decision.allowed) {
       return { ok: false, failure: decision.failure };
     }
-    context
-      .get('lifecycle')
-      .sending(plan.planId, descriptor.kind === 'read' || descriptor.kind === 'navigate');
+    lifecycle.sending(plan.planId, descriptor.kind === 'read' || descriptor.kind === 'navigate');
     context.signal.throwIfAborted();
     const result = await invokeEffect(effect, context.get('input'), descriptor, plan, {
       root: context.signal,

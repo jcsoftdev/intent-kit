@@ -63,6 +63,7 @@ const setup = (behavior: {
   const lifecycle: ActionLifecycle = {
     confirming: () => undefined,
     executing: () => undefined,
+    graceFlush: () => new AbortController().signal,
     sending: () => undefined,
     presenting: () => reveal.signal,
   };

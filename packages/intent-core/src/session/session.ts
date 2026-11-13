@@ -43,6 +43,7 @@ export interface IntentSession {
   answerByText(text: string): Promise<SessionState>;
   chooseCapability(capabilityId: string): Promise<SessionState>;
   cancel(): void;
+  flush(): void;
   undo(planId: string): Promise<SessionState>;
   retry(): Promise<SessionState>;
   reset(): void;
@@ -70,6 +71,8 @@ interface Run<TRole extends string> {
   last: SessionState;
   origin: InterpretationOrigin;
   answers: Answers;
+  readonly flush: AbortController;
+  holdsGraceWindow: boolean;
 }
 
 interface RetryablePlan<TRole extends string> {
@@ -153,6 +156,19 @@ export function createIntentSession<TPrincipal, TRole extends string>(
     send(run, { type: 'failure', failure });
   };
 
+  const inGraceWindow = (run: Run<TRole> | undefined): boolean =>
+    run !== undefined &&
+    run === active &&
+    run.holdsGraceWindow &&
+    current.name === 'executing' &&
+    !current.sent;
+
+  const flushGraceWindow = (run: Run<TRole> | undefined): void => {
+    if (run !== undefined && inGraceWindow(run)) {
+      run.flush.abort();
+    }
+  };
+
   const cancelRun = (run: Run<TRole>): void => {
     if (run !== active) {
       return;
@@ -163,6 +179,10 @@ export function createIntentSession<TPrincipal, TRole extends string>(
     }
     if (current.name === 'presenting') {
       run.reveal?.abort();
+      return;
+    }
+    if (inGraceWindow(run)) {
+      flushGraceWindow(run);
       return;
     }
     if (isCancellable(current)) {
@@ -191,9 +211,13 @@ export function createIntentSession<TPrincipal, TRole extends string>(
       guardRole(run);
       send(run, { type: 'confirmation.requested', planId });
     },
-    executing(planId) {
+    executing(planId, holdsGraceWindow) {
       guardRole(run);
+      run.holdsGraceWindow = holdsGraceWindow;
       send(run, { type: 'execution.started', planId });
+    },
+    graceFlush() {
+      return run.flush.signal;
     },
     sending(_planId, cancellableAfterSend) {
       guardRole(run);
@@ -282,15 +306,18 @@ export function createIntentSession<TPrincipal, TRole extends string>(
     ...(restrictTo === undefined ? {} : { restrictTo }),
   });
 
+  const holdsNextCommand = (): boolean => holdsNewCommands(current) || inGraceWindow(active);
+
   const submit = async (command: Command): Promise<SessionState> => {
     retryable = undefined;
     queueTicket += 1;
     const ticket = queueTicket;
     await Promise.resolve();
-    while (ticket > droppedUpTo && ticket === queueTicket && holdsNewCommands(current) && running) {
+    while (ticket > droppedUpTo && ticket === queueTicket && holdsNextCommand() && running) {
       if (current.name === 'presenting') {
         active?.reveal?.abort();
       }
+      flushGraceWindow(active);
       await running;
     }
     if (ticket <= droppedUpTo) {
@@ -314,6 +341,8 @@ export function createIntentSession<TPrincipal, TRole extends string>(
       last: current,
       origin: 'interpreter',
       answers: {},
+      flush: new AbortController(),
+      holdsGraceWindow: false,
     };
     active = run;
     send(run, { type: 'capture.submitted' });
@@ -408,6 +437,8 @@ export function createIntentSession<TPrincipal, TRole extends string>(
       last: current,
       origin: 'interpreter',
       answers: {},
+      flush: new AbortController(),
+      holdsGraceWindow: false,
     };
     active = run;
     return run;
@@ -454,6 +485,8 @@ export function createIntentSession<TPrincipal, TRole extends string>(
       controller: new AbortController(),
       reveal: undefined,
       last: current,
+      flush: new AbortController(),
+      holdsGraceWindow: false,
     };
     active = run;
     send(run, { type: 'retry.started', planId: pending.plan.planId });
@@ -487,6 +520,9 @@ export function createIntentSession<TPrincipal, TRole extends string>(
       if (active) {
         cancelRun(active);
       }
+    },
+    flush() {
+      flushGraceWindow(active);
     },
     undo,
     retry,

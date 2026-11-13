@@ -353,16 +353,83 @@ test('cancel after execution.sent for a write is ignored and the result still co
   expect(h.names()).not.toContain('cancelled');
 });
 
-test('cancel during the grace wait ends cancelled and the effect never runs', async () => {
-  const h = harness({ descriptor: graceDescriptor, responders: [answering(complete('p-1'))] });
+const inGraceWindow = async (responders: readonly Responder[] = []) => {
+  const h = harness({
+    descriptor: graceDescriptor,
+    responders: [answering(complete('p-1')), ...responders],
+  });
   const submitted = h.session.submit({ text: 'pedido', source: 'text' });
   await flush();
-  expect(h.session.state()).toMatchObject({ name: 'executing', sent: false });
-  h.session.cancel();
+  expect(h.session.state()).toMatchObject({ name: 'executing', planId: 'p-1', sent: false });
+  return { h, submitted };
+};
+
+test.each<[string, (h: ReturnType<typeof harness>) => void]>([
+  ['cancel', (h) => h.session.cancel()],
+  ['reset', (h) => h.session.reset()],
+  ['flush', (h) => h.session.flush()],
+  [
+    'a role change',
+    (h) => {
+      h.setRole('host');
+      h.session.flush();
+    },
+  ],
+])(
+  '%s during the grace window sends the action at once instead of dropping it',
+  async (_name, interrupt) => {
+    const { h, submitted } = await inGraceWindow();
+    interrupt(h);
+    const state = await submitted;
+    expect(h.calls).toHaveLength(1);
+    expect(completedResult(state)?.status).toBe('completed');
+    expect(h.names()).not.toContain('cancelled');
+  },
+);
+
+test('a role change during the grace window no longer drops the action when the window ends', async () => {
+  const { h, submitted } = await inGraceWindow();
+  h.setRole('host');
+  await h.clock.advance(5000);
+  expect(completedResult(await submitted)?.status).toBe('completed');
+  expect(h.calls).toHaveLength(1);
+});
+
+test('a new submit during the grace window sends the first action at once and then runs the second', async () => {
+  const { h, submitted } = await inGraceWindow([answering(unsupported)]);
+  const second = h.session.submit({ text: 'otro', source: 'text' });
+  expect(completedResult(await submitted)?.status).toBe('completed');
+  expect((await second).name).toBe('unsupported');
+  expect(h.calls).toHaveLength(1);
+  expect(h.names()).toEqual([
+    'interpreting',
+    'executing',
+    'presenting',
+    'completed',
+    'interpreting',
+    'unsupported',
+  ]);
+});
+
+test('undo after a flush is refused because the action was already sent', async () => {
+  const { h, submitted } = await inGraceWindow();
+  h.session.flush();
   await submitted;
-  await h.clock.advance(10_000);
-  expect(h.session.state().name).toBe('cancelled');
-  expect(h.calls).toEqual([]);
+  expect(await h.kit.undo.undo('p-1', { signal: new AbortController().signal })).toMatchObject({
+    ok: false,
+  });
+  expect(h.calls).toHaveLength(1);
+});
+
+test('flush outside a grace window changes nothing', async () => {
+  const release = deferred<EffectResult<unknown>>();
+  const h = harness({ responders: [answering(complete('p-1'))], effect: () => release.promise });
+  const submitted = h.session.submit({ text: 'pedido', source: 'text' });
+  await flush();
+  h.session.flush();
+  expect(h.session.state()).toMatchObject({ name: 'executing', sent: true });
+  release.resolve({ ok: true, output: { orderId: 'o-1' } });
+  expect(completedResult(await submitted)?.status).toBe('completed');
 });
 
 test('a second submit while executing-sent waits and starts only after the first completes', async () => {
@@ -809,7 +876,7 @@ test('events from a superseded command never change the current state', async ()
   await flush();
   expect(session.state().name).toBe('interpreting');
   expect(() => lifecycle?.confirming('p-1')).toThrow();
-  expect(() => lifecycle?.executing('p-1')).toThrow();
+  expect(() => lifecycle?.executing('p-1', false)).toThrow();
   expect(() => lifecycle?.sending('p-1', false)).toThrow();
   lifecycle?.presenting('p-1');
   expect(session.state().name).toBe('interpreting');
@@ -929,7 +996,7 @@ test('the lifecycle refuses to send once the command is cancelled', async () => 
   });
   void session.submit({ text: 'uno', source: 'text' });
   await flush();
-  lifecycles[0]?.executing('p-1');
+  lifecycles[0]?.executing('p-1', false);
   session.cancel();
   expect(() => lifecycles[0]?.sending('p-1', false)).toThrow();
   expect(session.state().name).toBe('cancelled');
