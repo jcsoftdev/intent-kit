@@ -144,6 +144,7 @@ interface Options {
   readonly holdSecondAuthorization?: Promise<void>;
   readonly holdAuthorization?: { readonly at: number; readonly until: Promise<void> };
   readonly compensate?: (signal: AbortSignal) => Promise<EffectResult<unknown>>;
+  readonly failureMessage?: (failure: Failure) => string | undefined;
 }
 
 const harness = (options: Options = {}) => {
@@ -227,6 +228,7 @@ const harness = (options: Options = {}) => {
     activeRole: () => role,
     locale: 'es-PE',
     failureMessages,
+    failureMessage: options.failureMessage,
   });
   const session = kit.createSession();
   const states: SessionState[] = [];
@@ -485,6 +487,38 @@ test('a failed interpretation is announced assertively with failureMessages[code
   const h = harness({ responders: [async () => ({ ok: false, failure })] });
   const state = await h.session.submit({ text: 'pedido', source: 'text' });
   expect(state).toEqual({ name: 'failed', failure });
+  expect(h.announcements).toEqual([
+    { message: 'msg:INTERPRETER_TIMEOUT', politeness: 'assertive' },
+  ]);
+});
+
+test('a failure message resolver supplies the single assertive announcement', async () => {
+  const failure: Failure = {
+    stage: 'execution',
+    code: 'CONFLICT',
+    retryable: false,
+    appCode: 'DRAFT_IN_PROGRESS',
+  };
+  const h = harness({
+    responders: [async () => ({ ok: false, failure })],
+    failureMessage: (candidate) =>
+      candidate.appCode === 'DRAFT_IN_PROGRESS' ? 'specific' : undefined,
+  });
+  await h.session.submit({ text: 'pedido', source: 'text' });
+  expect(h.announcements).toEqual([{ message: 'specific', politeness: 'assertive' }]);
+});
+
+test('a failure message resolver returning undefined falls back to failureMessages[code]', async () => {
+  const failure: Failure = {
+    stage: 'interpretation',
+    code: 'INTERPRETER_TIMEOUT',
+    retryable: true,
+  };
+  const h = harness({
+    responders: [async () => ({ ok: false, failure })],
+    failureMessage: () => undefined,
+  });
+  await h.session.submit({ text: 'pedido', source: 'text' });
   expect(h.announcements).toEqual([
     { message: 'msg:INTERPRETER_TIMEOUT', politeness: 'assertive' },
   ]);

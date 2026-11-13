@@ -61,6 +61,7 @@ export interface SessionDependencies<TPrincipal, TRole extends string> {
   readonly activeRole: () => TRole;
   readonly locale: string;
   readonly failureMessages: FailureMessages;
+  readonly failureMessage?: FailureMessageResolver;
 }
 
 interface Run<TRole extends string> {
@@ -81,6 +82,8 @@ interface RetryablePlan<TRole extends string> {
 }
 
 type CompleteInterpretation = Extract<Interpretation, { status: 'complete' }>;
+
+export type FailureMessageResolver = (failure: Failure) => string | undefined;
 
 const interpreterUnavailable: Failure = {
   stage: 'interpretation',
@@ -152,7 +155,10 @@ export function createIntentSession<TPrincipal, TRole extends string>(
     if (run !== active || isTerminal(current)) {
       return;
     }
-    dependencies.announcer.announce(dependencies.failureMessages[failure.code], 'assertive');
+    dependencies.announcer.announce(
+      dependencies.failureMessage?.(failure) ?? dependencies.failureMessages[failure.code],
+      'assertive',
+    );
     send(run, { type: 'failure', failure });
   };
 

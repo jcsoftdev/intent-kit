@@ -14,7 +14,7 @@ import { createUndoRegistry } from '../policy/index.js';
 import { DEFAULT_ACTION_BUDGETS } from '../action/index.js';
 import { noopEventBus, systemClock } from '../primitives/index.js';
 import { createIntentSession } from './session.js';
-import type { IntentSession } from './session.js';
+import type { FailureMessageResolver, IntentSession } from './session.js';
 
 export interface IntentKitConfig<
   TPrincipal,
@@ -27,6 +27,7 @@ export interface IntentKitConfig<
   readonly activeRole: () => TRole;
   readonly locale: string;
   readonly failureMessages: FailureMessages;
+  readonly failureMessage?: FailureMessageResolver;
 }
 
 export interface IntentKit {
@@ -74,6 +75,7 @@ export function createIntentKit<
         activeRole: config.activeRole,
         locale: config.locale,
         failureMessages: config.failureMessages,
+        failureMessage: config.failureMessage,
       }),
     dispatch: (plan, { signal }) =>
       pipeline.run(
