@@ -3,6 +3,11 @@
     "packages/intent-core",
     "packages/intent-zod",
     "packages/intent-server",
-    "packages/intent-testing"
+    "packages/intent-testing",
+    "packages/intent-dom",
+    "packages/intent-voice-web",
+    "packages/intent-react",
+    "packages/intent-next",
+    "packages/intent-ui"
   ]
 }

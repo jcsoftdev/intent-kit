@@ -15,7 +15,7 @@ const packageSources = () =>
     .map((name) => join(root, 'packages', name, 'src'))
     .filter((directory) => statSync(directory, { throwIfNoEntry: false })?.isDirectory())
     .flatMap(walk)
-    .filter((file) => file.endsWith('.ts'))
+    .filter((file) => file.endsWith('.ts') || file.endsWith('.tsx'))
     .map((file) => ({ path: relative(root, file), source: readFileSync(file, 'utf8') }));
 
 const nonEmpty = (record) => record !== undefined && Object.keys(record).length > 0;

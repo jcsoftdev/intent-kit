@@ -37,6 +37,7 @@ export interface Command {
 export interface IntentSession {
   state(): SessionState;
   subscribe(listener: (state: SessionState) => void): Unregister;
+  capture(mode: 'listening' | 'typing'): AbortSignal;
   submit(command: Command): Promise<SessionState>;
   answer(answers: Answers): Promise<SessionState>;
   answerByText(text: string): Promise<SessionState>;
@@ -299,7 +300,11 @@ export function createIntentSession<TPrincipal, TRole extends string>(
       return current;
     }
     if (active) {
-      cancelRun(active);
+      if (current.name === 'capturing') {
+        active.controller.abort();
+      } else {
+        cancelRun(active);
+      }
     }
     const run: Run<TRole> = {
       controller: new AbortController(),
@@ -314,6 +319,19 @@ export function createIntentSession<TPrincipal, TRole extends string>(
     send(run, { type: 'capture.submitted' });
     await interpret(run, utteranceOf(run));
     return run.last;
+  };
+
+  const capture = (mode: 'listening' | 'typing'): AbortSignal => {
+    if (active && current.name === 'capturing') {
+      cancelRun(active);
+    }
+    const event: SessionEvent = { type: 'capture.started', mode };
+    if (transition(current, event) === current) {
+      return AbortSignal.abort();
+    }
+    const run = adoptIdleRun();
+    send(run, event);
+    return run.controller.signal;
   };
 
   const resume = async (
@@ -451,6 +469,7 @@ export function createIntentSession<TPrincipal, TRole extends string>(
         listeners.delete(listener);
       };
     },
+    capture,
     submit,
     answer: (answers) => resume(answers, undefined),
     answerByText(text) {

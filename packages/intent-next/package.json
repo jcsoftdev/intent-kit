@@ -1,0 +1,45 @@
+{
+  "name": "@jcsoftdev/intent-next",
+  "version": "0.1.0",
+  "description": "Next.js router adapter for the intent kit.",
+  "author": "jcsoftdev",
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": false,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jcsoftdev/intent-kit.git",
+    "directory": "packages/intent-next"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json",
+    "prepublishOnly": "node ../../scripts/assert-ci-publish.mjs"
+  },
+  "dependencies": {
+    "@jcsoftdev/intent-core": "workspace:*",
+    "@jcsoftdev/intent-react": "workspace:*"
+  },
+  "peerDependencies": {
+    "react": ">=19.2.0 <20",
+    "next": ">=16.4.0 <17"
+  },
+  "devDependencies": {
+    "@jcsoftdev/intent-testing": "workspace:*"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

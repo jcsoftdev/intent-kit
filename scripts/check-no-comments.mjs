@@ -24,7 +24,7 @@ const scanned = () =>
       ...walk(join(dir, 'test')),
     ]),
     ...walk(join(root, 'scripts')),
-  ].filter((file) => file.endsWith('.ts') || file.endsWith('.mjs'));
+  ].filter((file) => file.endsWith('.ts') || file.endsWith('.tsx') || file.endsWith('.mjs'));
 
 const STRING_LITERAL = /'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|`(?:[^`\\]|\\[\s\S])*`/g;
 const REGEX_LITERAL =

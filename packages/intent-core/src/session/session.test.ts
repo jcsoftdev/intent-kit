@@ -1139,3 +1139,31 @@ test('an undo refused because the session is busy announces that it cannot undo 
   pending.resolve(ok(unsupported));
   await second;
 });
+
+test('capture moves idle to capturing listening and submit leaves it for interpreting', async () => {
+  const h = harness({ responders: [answering(complete('p-1'))] });
+  const signal = h.session.capture('listening');
+  expect(h.session.state()).toEqual({ name: 'capturing', mode: 'listening' });
+  expect(signal.aborted).toBe(false);
+  await h.session.submit({ text: 'pedido', source: 'voice' });
+  expect(signal.aborted).toBe(true);
+  expect(h.names()).toEqual(['capturing', 'interpreting', 'executing', 'presenting', 'completed']);
+});
+
+test('cancel while capturing aborts the capture signal and ends in cancelled without calling interpret', () => {
+  const h = harness();
+  const signal = h.session.capture('typing');
+  h.session.cancel();
+  expect(signal.aborted).toBe(true);
+  expect(h.session.state().name).toBe('cancelled');
+  expect(h.interpretations).toEqual([]);
+});
+
+test('a second capture aborts the first capture signal', () => {
+  const h = harness();
+  const first = h.session.capture('typing');
+  const second = h.session.capture('listening');
+  expect(first.aborted).toBe(true);
+  expect(second.aborted).toBe(false);
+  expect(h.session.state()).toEqual({ name: 'capturing', mode: 'listening' });
+});

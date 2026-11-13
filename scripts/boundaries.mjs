@@ -8,15 +8,20 @@ const DOM_PATTERNS = [/\b(?:document|window|navigator)\./, /\bHTMLElement\b/];
 
 const NODE_BUILTINS = new Set(['fs', 'path', 'http', 'https', 'net', 'child_process']);
 
-const isTestFile = (path) => /\.test(?:-d)?\.ts$/.test(path);
+const isTestFile = (path) => /\.test(?:-d)?\.tsx?$/.test(path);
 const inPackage = (path, name) => path.startsWith(`packages/${name}/src/`);
-const inAnyPackage = (path) => /^packages\/[^/]+\/src\//.test(path);
+const LEGACY_PACKAGES = ['intent-core', 'intent-zod', 'intent-server', 'intent-testing'];
+const inLegacyPackage = (path) => LEGACY_PACKAGES.some((name) => inPackage(path, name));
 
 const isBare = (specifier) => !specifier.startsWith('.');
-const isFramework = (specifier) =>
-  ['react', 'react-dom', 'next'].includes(specifier) ||
+const isReact = (specifier) =>
+  ['react', 'react-dom'].includes(specifier) ||
   specifier.startsWith('react/') ||
-  specifier.startsWith('next/');
+  specifier.startsWith('react-dom/');
+const isNext = (specifier) => specifier === 'next' || specifier.startsWith('next/');
+const isFramework = (specifier) => isReact(specifier) || isNext(specifier);
+const isDesignSystem = (specifier) =>
+  specifier === '@jcsoftdev/ui' || specifier.startsWith('@jcsoftdev/ui/');
 const isNodeBuiltin = (specifier) => specifier.startsWith('node:') || NODE_BUILTINS.has(specifier);
 const isTestingPackage = (specifier) =>
   specifier === '@jcsoftdev/intent-testing' || specifier.startsWith('@jcsoftdev/intent-testing/');
@@ -27,7 +32,18 @@ const SPECIFIER_RULES = [
     applies: (path) => inPackage(path, 'intent-core') && !isTestFile(path),
     forbids: isBare,
   },
-  { rule: 'no-framework', applies: inAnyPackage, forbids: isFramework },
+  { rule: 'no-framework', applies: inLegacyPackage, forbids: isFramework },
+  {
+    rule: 'dom-packages-no-framework',
+    applies: (path) => inPackage(path, 'intent-dom') || inPackage(path, 'intent-voice-web'),
+    forbids: isFramework,
+  },
+  {
+    rule: 'react-no-next-or-design-system',
+    applies: (path) => inPackage(path, 'intent-react'),
+    forbids: (specifier) => isNext(specifier) || isDesignSystem(specifier),
+  },
+  { rule: 'ui-no-next', applies: (path) => inPackage(path, 'intent-ui'), forbids: isNext },
   {
     rule: 'no-node-builtins',
     applies: (path) => inPackage(path, 'intent-core') || inPackage(path, 'intent-server'),

@@ -68,6 +68,60 @@ const cases = [
     source: "await import('node:fs');",
     expected: ['no-node-builtins'],
   },
+  {
+    name: 'intent-dom importing react is rejected',
+    path: 'packages/intent-dom/src/a.ts',
+    source: "import { useState } from 'react';",
+    expected: ['dom-packages-no-framework'],
+  },
+  {
+    name: 'intent-react importing next is rejected',
+    path: 'packages/intent-react/src/a.tsx',
+    source: "import { useRouter } from 'next/navigation';",
+    expected: ['react-no-next-or-design-system'],
+  },
+  {
+    name: 'intent-react importing @jcsoftdev/ui is rejected',
+    path: 'packages/intent-react/src/a.tsx',
+    source: "import { Button } from '@jcsoftdev/ui';",
+    expected: ['react-no-next-or-design-system'],
+  },
+  {
+    name: 'intent-react importing react is allowed',
+    path: 'packages/intent-react/src/a.tsx',
+    source: "import { useState } from 'react';",
+    expected: [],
+  },
+  {
+    name: 'intent-ui importing next is rejected',
+    path: 'packages/intent-ui/src/a.tsx',
+    source: "import Link from 'next/link';",
+    expected: ['ui-no-next'],
+  },
+  {
+    name: 'intent-ui importing @jcsoftdev/ui and react is allowed',
+    path: 'packages/intent-ui/src/a.tsx',
+    source: "import { useState } from 'react';\nimport { Button } from '@jcsoftdev/ui';",
+    expected: [],
+  },
+  {
+    name: 'intent-voice-web importing react is rejected',
+    path: 'packages/intent-voice-web/src/a.ts',
+    source: "import { useEffect } from 'react';",
+    expected: ['dom-packages-no-framework'],
+  },
+  {
+    name: 'intent-dom may use DOM globals',
+    path: 'packages/intent-dom/src/a.ts',
+    source: 'const x = document.body;',
+    expected: [],
+  },
+  {
+    name: 'intent-next importing react and next is allowed',
+    path: 'packages/intent-next/src/a.tsx',
+    source: "import { useEffect } from 'react';\nimport { useRouter } from 'next/navigation';",
+    expected: [],
+  },
 ];
 
 for (const { name, path, source, expected } of cases) {
