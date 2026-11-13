@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import type { ConfirmationPolicy, Reversibility } from '../contracts/index.js';
+import type { ConfirmationPolicy, Reversibility, RiskLevel } from '../contracts/index.js';
 import { requiresConfirmation } from './confirmation.js';
 
 const reversibilities: Record<string, Reversibility> = {
@@ -8,17 +8,25 @@ const reversibilities: Record<string, Reversibility> = {
   grace: { kind: 'grace', delayMs: 1000 },
 };
 
-test.each<[ConfirmationPolicy, string, 'text' | 'voice', boolean]>([
-  ['always', 'compensate', 'text', true],
-  ['never', 'compensate', 'text', false],
-  ['never', 'none', 'voice', true],
-  ['never', 'none', 'text', false],
-  ['whenVoice', 'compensate', 'voice', true],
-  ['whenVoice', 'compensate', 'text', false],
-  ['whenIrreversible', 'none', 'text', true],
-  ['whenIrreversible', 'compensate', 'voice', false],
-  ['whenIrreversible', 'grace', 'voice', false],
-])('confirmation %s + reversibility %s + %s → %s', (confirmation, kind, source, expected) => {
-  const reversibility = reversibilities[kind] as Reversibility;
-  expect(requiresConfirmation({ confirmation, reversibility }, source)).toBe(expected);
-});
+test.each<[ConfirmationPolicy, string, RiskLevel, 'text' | 'voice', boolean]>([
+  ['always', 'compensate', 'write', 'text', true],
+  ['never', 'compensate', 'write', 'text', false],
+  ['never', 'none', 'write', 'voice', true],
+  ['never', 'none', 'write', 'text', false],
+  ['whenVoice', 'compensate', 'write', 'voice', true],
+  ['whenVoice', 'compensate', 'write', 'text', false],
+  ['whenIrreversible', 'none', 'write', 'text', true],
+  ['whenIrreversible', 'compensate', 'write', 'voice', false],
+  ['whenIrreversible', 'grace', 'write', 'voice', false],
+  ['never', 'none', 'read', 'voice', false],
+  ['never', 'none', 'destructive', 'voice', true],
+  ['whenVoice', 'none', 'read', 'voice', true],
+  ['always', 'none', 'read', 'voice', true],
+  ['whenIrreversible', 'none', 'read', 'text', true],
+])(
+  'confirmation %s + reversibility %s + risk %s + %s → %s',
+  (confirmation, kind, risk, source, expected) => {
+    const reversibility = reversibilities[kind] as Reversibility;
+    expect(requiresConfirmation({ confirmation, reversibility, risk }, source)).toBe(expected);
+  },
+);
