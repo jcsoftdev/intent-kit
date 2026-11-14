@@ -274,7 +274,7 @@ export const compilePattern = (
   const pairs = slotPairsOf(elements, kindOf);
   const capture = (normalized: string): CapturedSlots | undefined => {
     const found = expression.exec(fold(normalized));
-    if (!found?.groups) {
+    if (found === null) {
       return undefined;
     }
     const captured = [...groups].flatMap(([group, name]) => {

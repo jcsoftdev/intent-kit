@@ -30,6 +30,12 @@ describe('compilePattern', () => {
     expect(ready.match('arroz con pollo listo')).toBeUndefined();
   });
 
+  test('a pattern without slots matches the whole phrase and nothing else', () => {
+    const open = compilePattern('abre la cola', kindOf);
+    expect(open.match('abre la cola')).toEqual({});
+    expect(open.match('abre la cola de cocina')).toBeUndefined();
+  });
+
   test('does not match an empty dish', () => {
     const pattern = compilePattern('{dish} para la mesa {table}', kindOf);
     expect(pattern.match(' para la mesa 3')).toBeUndefined();
