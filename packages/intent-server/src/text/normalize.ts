@@ -31,6 +31,16 @@ export const SPANISH_NORMALIZATION: NormalizationRules = {
 
 const MAX_UTTERANCE_LENGTH = 500;
 
+const SPOKEN_DECIMAL = /(\d)[.,](\d{1,2})(?!\d)/g;
+const FRACTION_WIDTH = 2;
+
+export const spellDecimals = (text: string): string =>
+  text.replace(
+    SPOKEN_DECIMAL,
+    (_match, whole: string, fraction: string) =>
+      `${whole} con ${fraction.padEnd(FRACTION_WIDTH, '0')}`,
+  );
+
 const DIGITS = /^\d/;
 
 const isQuantityBeforeNumber = (
@@ -93,7 +103,11 @@ export const createNormalizer = (
   const fillers = fillersOf(rules);
   const words = numberWordsOf(rules);
   return (text) =>
-    stripLeadingFillers(foldText(text.slice(0, MAX_UTTERANCE_LENGTH)), fillers, words)
+    stripLeadingFillers(
+      foldText(spellDecimals(text.slice(0, MAX_UTTERANCE_LENGTH))),
+      fillers,
+      words,
+    )
       .replace(/\s+/g, ' ')
       .trim();
 };

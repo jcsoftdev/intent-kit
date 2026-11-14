@@ -1,6 +1,8 @@
 import { IntentDefinitionError, foldText } from '@jcsoftdev/intent-core';
 
-export type SlotKind = 'text' | 'number';
+export type SlotKind = 'text' | 'number' | 'decimal';
+
+const isNumeric = (kind: SlotKind): boolean => kind !== 'text';
 
 export type CapturedSlots = Readonly<Record<string, string>>;
 
@@ -138,12 +140,19 @@ const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/
 const numberSource = (words: ReadonlyMap<string, number>): string =>
   ['\\d+', ...[...words.keys()].sort((a, b) => b.length - a.length).map(escapeRegExp)].join('|');
 
+const FRACTION_JOINER = ' con ';
+const FRACTION_DIGITS = '\\d{1,2}';
+
 const slotSource = (
   kind: SlotKind,
   group: string,
   numbers: string,
   delimitedByNumber: boolean,
 ): string => {
+  if (kind === 'decimal') {
+    const fractions = numbers.replace('\\d+', FRACTION_DIGITS);
+    return `(?<${group}>(?:${numbers})(?:${FRACTION_JOINER}(?:${fractions}))?)`;
+  }
   if (kind === 'number') {
     return `(?<${group}>${numbers})`;
   }
@@ -194,7 +203,7 @@ const numberDelimitedSlots = (
   elements.forEach((element) => {
     if (element.kind === 'literal') {
       openText = undefined;
-    } else if (kindOf(element.name) === 'number') {
+    } else if (isNumeric(kindOf(element.name))) {
       numbersSince += openText === undefined ? 0 : 1;
     } else {
       if (openText !== undefined && numbersSince !== 1) {
@@ -218,7 +227,7 @@ const slotPairsOf = (
     const next = elements[position + 1];
     return element.kind === 'slot' &&
       next?.kind === 'slot' &&
-      kindOf(element.name) === 'number' &&
+      isNumeric(kindOf(element.name)) &&
       kindOf(next.name) === 'text'
       ? [{ numberSlot: element.name, textSlot: next.name }]
       : [];
@@ -239,16 +248,29 @@ export const splitLeadingNumber = (
     : { value: Number(numberValue(raw, words)), rest };
 };
 
+const FRACTION_WIDTH = 2;
+
+const decimalValue = (raw: string, words: ReadonlyMap<string, number>): string => {
+  const [whole = '', fraction] = raw.split(FRACTION_JOINER);
+  const wholeValue = numberValue(whole, words);
+  return fraction === undefined
+    ? wholeValue
+    : `${wholeValue}.${numberValue(fraction, words).padStart(FRACTION_WIDTH, '0')}`;
+};
+
 const convertNumbers = (
   captured: CapturedSlots,
-  numberSlots: ReadonlySet<string>,
+  kinds: ReadonlyMap<string, SlotKind>,
   words: ReadonlyMap<string, number>,
 ): CapturedSlots =>
   Object.fromEntries(
-    Object.entries(captured).map(([name, value]) => [
-      name,
-      numberSlots.has(name) ? numberValue(value, words) : value,
-    ]),
+    Object.entries(captured).map(([name, value]) => {
+      const kind = kinds.get(name);
+      if (kind === 'decimal') {
+        return [name, decimalValue(value, words)];
+      }
+      return [name, kind === 'number' ? numberValue(value, words) : value];
+    }),
   );
 
 export const compilePattern = (
@@ -260,7 +282,7 @@ export const compilePattern = (
   const elements = tokenize(template).map((token) => parseElement(token, fold, template));
   const delimited = numberDelimitedSlots(elements, kindOf, template);
   const names = elements.flatMap((element) => (element.kind === 'slot' ? [element.name] : []));
-  const textSlots = names.filter((name) => kindOf(name) === 'text');
+  const textSlots = names.filter((name) => !isNumeric(kindOf(name)));
   if (
     new Set(names).size !== names.length ||
     names.length > MAX_SLOTS ||
@@ -270,7 +292,9 @@ export const compilePattern = (
   }
   const { source, groups } = assemble(elements, kindOf, numberSource(words), delimited);
   const expression = new RegExp(`^${source}$`, 'u');
-  const numberSlots = new Set(names.filter((name) => kindOf(name) === 'number'));
+  const numberKinds = new Map(
+    names.filter((name) => isNumeric(kindOf(name))).map((name) => [name, kindOf(name)]),
+  );
   const pairs = slotPairsOf(elements, kindOf);
   const capture = (normalized: string): CapturedSlots | undefined => {
     const found = expression.exec(fold(normalized));
@@ -291,7 +315,7 @@ export const compilePattern = (
     pairs,
     match(normalized) {
       const captured = capture(normalized);
-      return captured && convertNumbers(captured, numberSlots, words);
+      return captured && convertNumbers(captured, numberKinds, words);
     },
     splits(normalized) {
       const captured = capture(normalized) ?? {};

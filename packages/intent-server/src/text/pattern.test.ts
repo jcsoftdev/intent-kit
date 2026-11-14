@@ -7,6 +7,37 @@ import type { SlotKind } from './pattern.js';
 const kindOf = (slot: string): SlotKind => (slot === 'quantity' ? 'number' : 'text');
 const order = compilePattern('pedido de {quantity?} {dish} para la mesa {table}', kindOf);
 
+describe('decimal slots', () => {
+  const normalize = createNormalizer();
+  const decimals = (slot: string): SlotKind => (slot === 'amount' ? 'decimal' : 'number');
+  const charge = compilePattern('paga con {amount}', decimals, normalize);
+  const table = compilePattern('mesa {table} paga con {amount}', decimals, normalize);
+
+  test.each([
+    ['paga con 235.50', '235.50'],
+    ['paga con 235,50', '235.50'],
+    ['paga con 200.5', '200.50'],
+    ['paga con 35.05', '35.05'],
+    ['paga con 235 con 50', '235.50'],
+    ['paga con 12 con 5', '12.05'],
+    ['paga con 50', '50'],
+  ])('%s captures %s', (utterance, amount) => {
+    expect(charge.match(normalize(utterance))).toEqual({ amount });
+  });
+
+  test('a whole number slot never takes a fraction', () => {
+    expect(table.match(normalize('mesa 2 paga con 35.50'))).toEqual({
+      table: '2',
+      amount: '35.50',
+    });
+    expect(table.match(normalize('mesa 2.50 paga con 35'))).toBeUndefined();
+  });
+
+  test('a fraction of three digits is not a decimal', () => {
+    expect(charge.match(normalize('paga con 1.234'))).toBeUndefined();
+  });
+});
+
 describe('compilePattern', () => {
   test('optional quantity absent', () => {
     expect(order.match('pedido de arroz con pollo para la mesa 3')).toEqual({
