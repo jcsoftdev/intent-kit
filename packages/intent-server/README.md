@@ -63,4 +63,4 @@ Check your adapters with `describeEntityResolverContract` and friends from `@jcs
 
 ## License
 
-MIT © jcsoftdev
+Proprietary. Copyright © 2026 jcsoftdev. All rights reserved. See [LICENSE](./LICENSE).

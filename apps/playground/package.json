@@ -4,7 +4,7 @@
   "private": true,
   "description": "Playground that runs the intent kit demos end to end",
   "author": "jcsoftdev",
-  "license": "MIT",
+  "license": "UNLICENSED",
   "type": "module",
   "sideEffects": false,
   "repository": {

@@ -127,4 +127,4 @@ The packages are `0.x`. Exported helpers beyond the documented factories and por
 
 ## License
 
-MIT © jcsoftdev
+Proprietary. Copyright © 2026 jcsoftdev. All rights reserved. See [LICENSE](./LICENSE).

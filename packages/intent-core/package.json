@@ -1,9 +1,9 @@
 {
   "name": "@jcsoftdev/intent-core",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Client core of the intent kit: capability descriptors, the action pipeline and the intent session.",
   "author": "jcsoftdev",
-  "license": "MIT",
+  "license": "UNLICENSED",
   "type": "module",
   "sideEffects": false,
   "repository": {

@@ -1,9 +1,9 @@
 {
   "name": "@jcsoftdev/intent-dom",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "DOM adapters for the intent kit: target registry, revealer and announcer.",
   "author": "jcsoftdev",
-  "license": "MIT",
+  "license": "UNLICENSED",
   "type": "module",
   "sideEffects": false,
   "repository": {

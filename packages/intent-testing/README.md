@@ -36,4 +36,4 @@ Labels should also resolve back to their own id; the suites do not require it, b
 
 ## License
 
-MIT © jcsoftdev
+Proprietary. Copyright © 2026 jcsoftdev. All rights reserved. See [LICENSE](./LICENSE).

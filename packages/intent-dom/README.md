@@ -10,4 +10,4 @@ pnpm add @jcsoftdev/intent-dom @jcsoftdev/intent-core
 
 ## License
 
-MIT © jcsoftdev
+Proprietary. Copyright © 2026 jcsoftdev. All rights reserved. See [LICENSE](./LICENSE).
