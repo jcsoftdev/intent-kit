@@ -200,7 +200,10 @@ const slotKindResolver =
     if (!target) {
       throw new IntentDefinitionError('INVALID_SLOT', `${descriptor.id}:${slot}`);
     }
-    return target.leafType === 'number' || target.leafType === 'integer' ? 'number' : 'text';
+    if (target.leafType === 'integer') {
+      return 'number';
+    }
+    return target.leafType === 'number' ? 'decimal' : 'text';
   };
 
 const slotNamesOf = (template: string): readonly string[] =>

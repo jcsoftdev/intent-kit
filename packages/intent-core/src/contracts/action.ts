@@ -33,7 +33,8 @@ export type ActionResult =
 
 export interface ActionLifecycle {
   confirming(planId: string): void;
-  executing(planId: string): void;
+  executing(planId: string, holdsGraceWindow: boolean): void;
+  graceFlush(planId: string): AbortSignal;
   sending(planId: string, cancellableAfterSend: boolean): void;
   presenting(planId: string): AbortSignal;
 }

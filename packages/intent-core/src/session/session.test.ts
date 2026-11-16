@@ -144,6 +144,7 @@ interface Options {
   readonly holdSecondAuthorization?: Promise<void>;
   readonly holdAuthorization?: { readonly at: number; readonly until: Promise<void> };
   readonly compensate?: (signal: AbortSignal) => Promise<EffectResult<unknown>>;
+  readonly failureMessage?: (failure: Failure) => string | undefined;
 }
 
 const harness = (options: Options = {}) => {
@@ -227,6 +228,7 @@ const harness = (options: Options = {}) => {
     activeRole: () => role,
     locale: 'es-PE',
     failureMessages,
+    failureMessage: options.failureMessage,
   });
   const session = kit.createSession();
   const states: SessionState[] = [];
@@ -353,16 +355,83 @@ test('cancel after execution.sent for a write is ignored and the result still co
   expect(h.names()).not.toContain('cancelled');
 });
 
-test('cancel during the grace wait ends cancelled and the effect never runs', async () => {
-  const h = harness({ descriptor: graceDescriptor, responders: [answering(complete('p-1'))] });
+const inGraceWindow = async (responders: readonly Responder[] = []) => {
+  const h = harness({
+    descriptor: graceDescriptor,
+    responders: [answering(complete('p-1')), ...responders],
+  });
   const submitted = h.session.submit({ text: 'pedido', source: 'text' });
   await flush();
-  expect(h.session.state()).toMatchObject({ name: 'executing', sent: false });
-  h.session.cancel();
+  expect(h.session.state()).toMatchObject({ name: 'executing', planId: 'p-1', sent: false });
+  return { h, submitted };
+};
+
+test.each<[string, (h: ReturnType<typeof harness>) => void]>([
+  ['cancel', (h) => h.session.cancel()],
+  ['reset', (h) => h.session.reset()],
+  ['flush', (h) => h.session.flush()],
+  [
+    'a role change',
+    (h) => {
+      h.setRole('host');
+      h.session.flush();
+    },
+  ],
+])(
+  '%s during the grace window sends the action at once instead of dropping it',
+  async (_name, interrupt) => {
+    const { h, submitted } = await inGraceWindow();
+    interrupt(h);
+    const state = await submitted;
+    expect(h.calls).toHaveLength(1);
+    expect(completedResult(state)?.status).toBe('completed');
+    expect(h.names()).not.toContain('cancelled');
+  },
+);
+
+test('a role change during the grace window no longer drops the action when the window ends', async () => {
+  const { h, submitted } = await inGraceWindow();
+  h.setRole('host');
+  await h.clock.advance(5000);
+  expect(completedResult(await submitted)?.status).toBe('completed');
+  expect(h.calls).toHaveLength(1);
+});
+
+test('a new submit during the grace window sends the first action at once and then runs the second', async () => {
+  const { h, submitted } = await inGraceWindow([answering(unsupported)]);
+  const second = h.session.submit({ text: 'otro', source: 'text' });
+  expect(completedResult(await submitted)?.status).toBe('completed');
+  expect((await second).name).toBe('unsupported');
+  expect(h.calls).toHaveLength(1);
+  expect(h.names()).toEqual([
+    'interpreting',
+    'executing',
+    'presenting',
+    'completed',
+    'interpreting',
+    'unsupported',
+  ]);
+});
+
+test('undo after a flush is refused because the action was already sent', async () => {
+  const { h, submitted } = await inGraceWindow();
+  h.session.flush();
   await submitted;
-  await h.clock.advance(10_000);
-  expect(h.session.state().name).toBe('cancelled');
-  expect(h.calls).toEqual([]);
+  expect(await h.kit.undo.undo('p-1', { signal: new AbortController().signal })).toMatchObject({
+    ok: false,
+  });
+  expect(h.calls).toHaveLength(1);
+});
+
+test('flush outside a grace window changes nothing', async () => {
+  const release = deferred<EffectResult<unknown>>();
+  const h = harness({ responders: [answering(complete('p-1'))], effect: () => release.promise });
+  const submitted = h.session.submit({ text: 'pedido', source: 'text' });
+  await flush();
+  h.session.flush();
+  expect(h.session.state()).toMatchObject({ name: 'executing', sent: true });
+  release.resolve({ ok: true, output: { orderId: 'o-1' } });
+  expect(completedResult(await submitted)?.status).toBe('completed');
 });
 
 test('a second submit while executing-sent waits and starts only after the first completes', async () => {
@@ -418,6 +487,38 @@ test('a failed interpretation is announced assertively with failureMessages[code
   const h = harness({ responders: [async () => ({ ok: false, failure })] });
   const state = await h.session.submit({ text: 'pedido', source: 'text' });
   expect(state).toEqual({ name: 'failed', failure });
+  expect(h.announcements).toEqual([
+    { message: 'msg:INTERPRETER_TIMEOUT', politeness: 'assertive' },
+  ]);
+});
+
+test('a failure message resolver supplies the single assertive announcement', async () => {
+  const failure: Failure = {
+    stage: 'execution',
+    code: 'CONFLICT',
+    retryable: false,
+    appCode: 'DRAFT_IN_PROGRESS',
+  };
+  const h = harness({
+    responders: [async () => ({ ok: false, failure })],
+    failureMessage: (candidate) =>
+      candidate.appCode === 'DRAFT_IN_PROGRESS' ? 'specific' : undefined,
+  });
+  await h.session.submit({ text: 'pedido', source: 'text' });
+  expect(h.announcements).toEqual([{ message: 'specific', politeness: 'assertive' }]);
+});
+
+test('a failure message resolver returning undefined falls back to failureMessages[code]', async () => {
+  const failure: Failure = {
+    stage: 'interpretation',
+    code: 'INTERPRETER_TIMEOUT',
+    retryable: true,
+  };
+  const h = harness({
+    responders: [async () => ({ ok: false, failure })],
+    failureMessage: () => undefined,
+  });
+  await h.session.submit({ text: 'pedido', source: 'text' });
   expect(h.announcements).toEqual([
     { message: 'msg:INTERPRETER_TIMEOUT', politeness: 'assertive' },
   ]);
@@ -809,7 +910,7 @@ test('events from a superseded command never change the current state', async ()
   await flush();
   expect(session.state().name).toBe('interpreting');
   expect(() => lifecycle?.confirming('p-1')).toThrow();
-  expect(() => lifecycle?.executing('p-1')).toThrow();
+  expect(() => lifecycle?.executing('p-1', false)).toThrow();
   expect(() => lifecycle?.sending('p-1', false)).toThrow();
   lifecycle?.presenting('p-1');
   expect(session.state().name).toBe('interpreting');
@@ -929,7 +1030,7 @@ test('the lifecycle refuses to send once the command is cancelled', async () => 
   });
   void session.submit({ text: 'uno', source: 'text' });
   await flush();
-  lifecycles[0]?.executing('p-1');
+  lifecycles[0]?.executing('p-1', false);
   session.cancel();
   expect(() => lifecycles[0]?.sending('p-1', false)).toThrow();
   expect(session.state().name).toBe('cancelled');
@@ -1138,4 +1239,32 @@ test('an undo refused because the session is busy announces that it cannot undo 
   h.session.cancel();
   pending.resolve(ok(unsupported));
   await second;
+});
+
+test('capture moves idle to capturing listening and submit leaves it for interpreting', async () => {
+  const h = harness({ responders: [answering(complete('p-1'))] });
+  const signal = h.session.capture('listening');
+  expect(h.session.state()).toEqual({ name: 'capturing', mode: 'listening' });
+  expect(signal.aborted).toBe(false);
+  await h.session.submit({ text: 'pedido', source: 'voice' });
+  expect(signal.aborted).toBe(true);
+  expect(h.names()).toEqual(['capturing', 'interpreting', 'executing', 'presenting', 'completed']);
+});
+
+test('cancel while capturing aborts the capture signal and ends in cancelled without calling interpret', () => {
+  const h = harness();
+  const signal = h.session.capture('typing');
+  h.session.cancel();
+  expect(signal.aborted).toBe(true);
+  expect(h.session.state().name).toBe('cancelled');
+  expect(h.interpretations).toEqual([]);
+});
+
+test('a second capture aborts the first capture signal', () => {
+  const h = harness();
+  const first = h.session.capture('typing');
+  const second = h.session.capture('listening');
+  expect(first.aborted).toBe(true);
+  expect(second.aborted).toBe(false);
+  expect(h.session.state()).toEqual({ name: 'capturing', mode: 'listening' });
 });

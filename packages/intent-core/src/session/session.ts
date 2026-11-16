@@ -37,11 +37,13 @@ export interface Command {
 export interface IntentSession {
   state(): SessionState;
   subscribe(listener: (state: SessionState) => void): Unregister;
+  capture(mode: 'listening' | 'typing'): AbortSignal;
   submit(command: Command): Promise<SessionState>;
   answer(answers: Answers): Promise<SessionState>;
   answerByText(text: string): Promise<SessionState>;
   chooseCapability(capabilityId: string): Promise<SessionState>;
   cancel(): void;
+  flush(): void;
   undo(planId: string): Promise<SessionState>;
   retry(): Promise<SessionState>;
   reset(): void;
@@ -59,6 +61,7 @@ export interface SessionDependencies<TPrincipal, TRole extends string> {
   readonly activeRole: () => TRole;
   readonly locale: string;
   readonly failureMessages: FailureMessages;
+  readonly failureMessage?: FailureMessageResolver;
 }
 
 interface Run<TRole extends string> {
@@ -69,6 +72,8 @@ interface Run<TRole extends string> {
   last: SessionState;
   origin: InterpretationOrigin;
   answers: Answers;
+  readonly flush: AbortController;
+  holdsGraceWindow: boolean;
 }
 
 interface RetryablePlan<TRole extends string> {
@@ -77,6 +82,8 @@ interface RetryablePlan<TRole extends string> {
 }
 
 type CompleteInterpretation = Extract<Interpretation, { status: 'complete' }>;
+
+export type FailureMessageResolver = (failure: Failure) => string | undefined;
 
 const interpreterUnavailable: Failure = {
   stage: 'interpretation',
@@ -148,8 +155,24 @@ export function createIntentSession<TPrincipal, TRole extends string>(
     if (run !== active || isTerminal(current)) {
       return;
     }
-    dependencies.announcer.announce(dependencies.failureMessages[failure.code], 'assertive');
+    dependencies.announcer.announce(
+      dependencies.failureMessage?.(failure) ?? dependencies.failureMessages[failure.code],
+      'assertive',
+    );
     send(run, { type: 'failure', failure });
+  };
+
+  const inGraceWindow = (run: Run<TRole> | undefined): boolean =>
+    run !== undefined &&
+    run === active &&
+    run.holdsGraceWindow &&
+    current.name === 'executing' &&
+    !current.sent;
+
+  const flushGraceWindow = (run: Run<TRole> | undefined): void => {
+    if (run !== undefined && inGraceWindow(run)) {
+      run.flush.abort();
+    }
   };
 
   const cancelRun = (run: Run<TRole>): void => {
@@ -162,6 +185,10 @@ export function createIntentSession<TPrincipal, TRole extends string>(
     }
     if (current.name === 'presenting') {
       run.reveal?.abort();
+      return;
+    }
+    if (inGraceWindow(run)) {
+      flushGraceWindow(run);
       return;
     }
     if (isCancellable(current)) {
@@ -190,9 +217,13 @@ export function createIntentSession<TPrincipal, TRole extends string>(
       guardRole(run);
       send(run, { type: 'confirmation.requested', planId });
     },
-    executing(planId) {
+    executing(planId, holdsGraceWindow) {
       guardRole(run);
+      run.holdsGraceWindow = holdsGraceWindow;
       send(run, { type: 'execution.started', planId });
+    },
+    graceFlush() {
+      return run.flush.signal;
     },
     sending(_planId, cancellableAfterSend) {
       guardRole(run);
@@ -281,15 +312,18 @@ export function createIntentSession<TPrincipal, TRole extends string>(
     ...(restrictTo === undefined ? {} : { restrictTo }),
   });
 
+  const holdsNextCommand = (): boolean => holdsNewCommands(current) || inGraceWindow(active);
+
   const submit = async (command: Command): Promise<SessionState> => {
     retryable = undefined;
     queueTicket += 1;
     const ticket = queueTicket;
     await Promise.resolve();
-    while (ticket > droppedUpTo && ticket === queueTicket && holdsNewCommands(current) && running) {
+    while (ticket > droppedUpTo && ticket === queueTicket && holdsNextCommand() && running) {
       if (current.name === 'presenting') {
         active?.reveal?.abort();
       }
+      flushGraceWindow(active);
       await running;
     }
     if (ticket <= droppedUpTo) {
@@ -299,7 +333,11 @@ export function createIntentSession<TPrincipal, TRole extends string>(
       return current;
     }
     if (active) {
-      cancelRun(active);
+      if (current.name === 'capturing') {
+        active.controller.abort();
+      } else {
+        cancelRun(active);
+      }
     }
     const run: Run<TRole> = {
       controller: new AbortController(),
@@ -309,11 +347,26 @@ export function createIntentSession<TPrincipal, TRole extends string>(
       last: current,
       origin: 'interpreter',
       answers: {},
+      flush: new AbortController(),
+      holdsGraceWindow: false,
     };
     active = run;
     send(run, { type: 'capture.submitted' });
     await interpret(run, utteranceOf(run));
     return run.last;
+  };
+
+  const capture = (mode: 'listening' | 'typing'): AbortSignal => {
+    if (active && current.name === 'capturing') {
+      cancelRun(active);
+    }
+    const event: SessionEvent = { type: 'capture.started', mode };
+    if (transition(current, event) === current) {
+      return AbortSignal.abort();
+    }
+    const run = adoptIdleRun();
+    send(run, event);
+    return run.controller.signal;
   };
 
   const resume = async (
@@ -390,6 +443,8 @@ export function createIntentSession<TPrincipal, TRole extends string>(
       last: current,
       origin: 'interpreter',
       answers: {},
+      flush: new AbortController(),
+      holdsGraceWindow: false,
     };
     active = run;
     return run;
@@ -436,6 +491,8 @@ export function createIntentSession<TPrincipal, TRole extends string>(
       controller: new AbortController(),
       reveal: undefined,
       last: current,
+      flush: new AbortController(),
+      holdsGraceWindow: false,
     };
     active = run;
     send(run, { type: 'retry.started', planId: pending.plan.planId });
@@ -451,6 +508,7 @@ export function createIntentSession<TPrincipal, TRole extends string>(
         listeners.delete(listener);
       };
     },
+    capture,
     submit,
     answer: (answers) => resume(answers, undefined),
     answerByText(text) {
@@ -468,6 +526,9 @@ export function createIntentSession<TPrincipal, TRole extends string>(
       if (active) {
         cancelRun(active);
       }
+    },
+    flush() {
+      flushGraceWindow(active);
     },
     undo,
     retry,

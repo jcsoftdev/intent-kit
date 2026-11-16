@@ -1,0 +1,45 @@
+{
+  "name": "@jcsoftdev/intent-react",
+  "version": "0.2.0",
+  "description": "React bindings for the intent kit: provider, session and target hooks, and the ui bridge.",
+  "author": "jcsoftdev",
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": false,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jcsoftdev/intent-kit.git",
+    "directory": "packages/intent-react"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json",
+    "prepublishOnly": "node ../../scripts/assert-ci-publish.mjs"
+  },
+  "dependencies": {
+    "@jcsoftdev/intent-core": "workspace:*"
+  },
+  "peerDependencies": {
+    "react": ">=19.2.0 <20",
+    "react-dom": ">=19.2.0 <20"
+  },
+  "devDependencies": {
+    "@jcsoftdev/intent-testing": "workspace:*",
+    "@jcsoftdev/intent-dom": "workspace:*"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

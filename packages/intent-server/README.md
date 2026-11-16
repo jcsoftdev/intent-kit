@@ -56,6 +56,9 @@ Check your adapters with `describeEntityResolverContract` and friends from `@jcs
 - `(el|la)` is an alternation and `list[oa]` a character class.
 - At most four slots and two text slots per pattern; literal words must survive the normalizer unchanged.
 - A numeric slot right before an entity slot (`{quantity?} {dish}`) is read both ways and never swapped silently.
+- A text slot, a number slot and a text slot may follow each other (`mesa {table} {quantity?} {dish}`). The first text slot takes at least one token and ends before the first later token that parses as a number (digits or a number word); the number slot then takes that token and the second text slot takes the rest. When the optional number is absent the second text slot takes everything after the first. Only one number slot may sit between two text slots, and two text slots with nothing between them stay invalid. Patterns without this shape keep their existing matching.
+- `,`, `;` and `.` outside a slot are whitespace in patterns, as in utterances: `mesa {table}, {quantity?} {dish}` matches "mesa 4, dos lomos".
+- `foldSpanishPlural(token)` is an opt-in helper for entity resolvers: it takes a folded token and returns its singular (`lomos` to `lomo`, `limones` to `limon`, `panes` to `pan`). Words not ending in `s`, words shorter than four letters and `tres`, `gas`, `mas`, `menos`, `pues` and the weekdays are returned unchanged. The normalizer never applies it.
 - Unknown or ambiguous slots, and conflicting numeric pairs, fail at construction (`INVALID_SLOT`, `AMBIGUOUS_SLOT`, `INVALID_PATTERN`).
 
 ## License

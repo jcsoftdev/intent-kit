@@ -2,6 +2,7 @@ export {
   SPANISH_NORMALIZATION,
   createMatchKey,
   createNormalizer,
+  foldSpanishPlural,
   numberWordsOf,
 } from './normalize.js';
 export type { NormalizationRules } from './normalize.js';

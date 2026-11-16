@@ -34,7 +34,9 @@ export const createLoadEffectStage = <TPrincipal, TRole extends string>(
   provides: ['effect'],
   async run(context, next) {
     const descriptor = context.get('descriptor');
-    context.get('lifecycle').executing(context.get('plan').planId);
+    context
+      .get('lifecycle')
+      .executing(context.get('plan').planId, descriptor.reversibility.kind === 'grace');
     if (isHandoff(descriptor)) {
       return next();
     }

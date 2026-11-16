@@ -20,12 +20,17 @@ The server owns every id. The client owns execution, navigation, presentation an
 
 ## Packages
 
-| Package                                                | What it is                                                      |
-| ------------------------------------------------------ | --------------------------------------------------------------- |
-| [`@jcsoftdev/intent-core`](packages/intent-core)       | Descriptors, ports, the action pipeline and the intent session. |
-| [`@jcsoftdev/intent-server`](packages/intent-server)   | The interpretation service: text to a tenant-scoped plan.       |
-| [`@jcsoftdev/intent-zod`](packages/intent-zod)         | Zod adapter for the `SchemaAdapter` port.                       |
-| [`@jcsoftdev/intent-testing`](packages/intent-testing) | Fakes and contract suites for every port.                       |
+| Package                                                    | What it is                                                      |
+| ---------------------------------------------------------- | --------------------------------------------------------------- |
+| [`@jcsoftdev/intent-core`](packages/intent-core)           | Descriptors, ports, the action pipeline and the intent session. |
+| [`@jcsoftdev/intent-server`](packages/intent-server)       | The interpretation service: text to a tenant-scoped plan.       |
+| [`@jcsoftdev/intent-zod`](packages/intent-zod)             | Zod adapter for the `SchemaAdapter` port.                       |
+| [`@jcsoftdev/intent-testing`](packages/intent-testing)     | Fakes and contract suites for every port.                       |
+| [`@jcsoftdev/intent-dom`](packages/intent-dom)             | DOM target registry, revealer and live-region announcer.        |
+| [`@jcsoftdev/intent-voice-web`](packages/intent-voice-web) | Push-to-talk speech source over Web Speech.                     |
+| [`@jcsoftdev/intent-react`](packages/intent-react)         | Provider, session and target hooks, ui bridge, voice hook.      |
+| [`@jcsoftdev/intent-next`](packages/intent-next)           | Next.js router adapter and route map.                           |
+| [`@jcsoftdev/intent-ui`](packages/intent-ui)               | Assistant components on top of `@jcsoftdev/ui`.                 |
 
 ## Install
 
@@ -35,6 +40,15 @@ pnpm add -D @jcsoftdev/intent-testing
 ```
 
 Node 24 or later. ESM only.
+
+## Browser
+
+```sh
+pnpm add @jcsoftdev/intent-dom @jcsoftdev/intent-voice-web @jcsoftdev/intent-react
+pnpm add @jcsoftdev/intent-next @jcsoftdev/intent-ui @jcsoftdev/ui react react-dom next
+```
+
+`intent-dom` and `intent-voice-web` need only DOM globals. `intent-react` needs React 19, `intent-next` adds Next 16, and `intent-ui` needs `@jcsoftdev/ui` 0.10. Install only the layers you use. Every component takes a typed `copy` object, so the kit ships no user-facing text.
 
 ## Quick start
 

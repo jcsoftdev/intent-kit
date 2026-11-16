@@ -1,0 +1,21 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "paths": {
+      "@jcsoftdev/intent-core": ["../intent-core/src/index.ts"],
+      "@jcsoftdev/intent-zod": ["../intent-zod/src/index.ts"],
+      "@jcsoftdev/intent-server": ["../intent-server/src/index.ts"],
+      "@jcsoftdev/intent-testing": ["../intent-testing/src/index.ts"],
+      "@jcsoftdev/intent-dom": ["../intent-dom/src/index.ts"],
+      "@jcsoftdev/intent-voice-web": ["../intent-voice-web/src/index.ts"],
+      "@jcsoftdev/intent-react": ["../intent-react/src/index.ts"],
+      "@jcsoftdev/intent-next": ["../intent-next/src/index.ts"],
+      "@jcsoftdev/intent-ui": ["../intent-ui/src/index.ts"],
+      "@jcsoftdev/intent-testing/contracts": ["../intent-testing/src/contracts/index.ts"]
+    },
+    "jsx": "react-jsx"
+  },
+  "include": ["src", "test"]
+}

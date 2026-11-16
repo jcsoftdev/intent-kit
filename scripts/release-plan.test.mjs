@@ -47,3 +47,16 @@ test('leaves private workspace packages out of the lockstep set', () => {
     [{ dir: 'packages/a', name: 'a', version: '1.0.0' }],
   );
 });
+
+test('nine enabled packages at 0.2.0 plan a v0.2.0 release', () => {
+  const names = ['core', 'zod', 'server', 'testing', 'dom', 'voice-web', 'react', 'next', 'ui'];
+  const nine = names.map((name) => ({
+    dir: `packages/intent-${name}`,
+    name: `@jcsoftdev/intent-${name}`,
+    version: '0.2.0',
+  }));
+  assert.deepEqual(
+    planRelease({ tag: 'v0.2.0', enabled: nine.map(({ dir }) => dir), packages: nine }),
+    { errors: [], publish: nine.map(({ dir }) => dir) },
+  );
+});

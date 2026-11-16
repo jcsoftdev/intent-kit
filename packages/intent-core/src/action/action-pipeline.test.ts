@@ -102,6 +102,7 @@ interface Options {
   readonly withCompensator?: boolean;
   readonly holdSecondAuthorization?: Promise<void>;
   readonly hangReveal?: boolean;
+  readonly graceFlush?: AbortSignal;
 }
 
 const failWith = (message: string): never => {
@@ -140,9 +141,14 @@ const harness = (options: Options = {}) => {
     },
   }));
   const lifecycleCalls: string[] = [];
+  const graceWindows: boolean[] = [];
   const lifecycle: ActionLifecycle = {
     confirming: () => lifecycleCalls.push('confirming'),
-    executing: () => lifecycleCalls.push('executing'),
+    executing: (_planId, holdsGraceWindow) => {
+      lifecycleCalls.push('executing');
+      graceWindows.push(holdsGraceWindow);
+    },
+    graceFlush: () => options.graceFlush ?? new AbortController().signal,
     sending: (_planId, cancellable) => lifecycleCalls.push(`sending:${cancellable}`),
     presenting: () => new AbortController().signal,
   };
@@ -240,6 +246,7 @@ const harness = (options: Options = {}) => {
     confirmations,
     compensations,
     lifecycleCalls,
+    graceWindows,
     undo,
     forms,
     route: () => route,
@@ -362,6 +369,57 @@ test('grace 5000 ms: without undo, the effect runs after 5000 ms', async () => {
   expect(h.calls).toHaveLength(1);
   expect(outcome.ok && outcome.value.status).toBe('completed');
   expect(h.undo.active()).toEqual([]);
+});
+
+test.each([
+  ['a grace descriptor', graceDescriptor, true],
+  ['a descriptor without grace', ordersCreate, false],
+])(
+  'executing tells the lifecycle whether %s holds a grace window',
+  async (_name, descriptor, holds) => {
+    const h = harness({ descriptor, withUndo: true });
+    const settled = h.run();
+    await flush();
+    await h.clock.advance(5000);
+    await settled;
+    expect(h.graceWindows).toEqual([holds]);
+  },
+);
+
+test('grace 5000 ms: a flush ends the window at once, runs the effect and withdraws the undo offer', async () => {
+  const flushing = new AbortController();
+  const h = harness({ descriptor: graceDescriptor, withUndo: true, graceFlush: flushing.signal });
+  const settled = h.run();
+  await flush();
+  expect(h.undo.active().map((entry) => entry.kind)).toEqual(['grace']);
+  flushing.abort();
+  const outcome = await settled;
+  expect(h.calls).toHaveLength(1);
+  expect(outcome.ok && outcome.value.status).toBe('completed');
+  expect(h.undo.active()).toEqual([]);
+});
+
+test('grace 5000 ms: a flush requested before the window opens sends without waiting', async () => {
+  const h = harness({
+    descriptor: graceDescriptor,
+    withUndo: true,
+    graceFlush: AbortSignal.abort(),
+  });
+  const outcome = await h.run();
+  expect(h.calls).toHaveLength(1);
+  expect(outcome.ok && outcome.value.status).toBe('completed');
+});
+
+test('grace 5000 ms: an undo after a flush is refused and the effect still runs', async () => {
+  const flushing = new AbortController();
+  const h = harness({ descriptor: graceDescriptor, withUndo: true, graceFlush: flushing.signal });
+  const settled = h.run();
+  await flush();
+  flushing.abort();
+  const undone = await h.undo.undo('p-1', { signal: new AbortController().signal });
+  expect(undone.ok).toBe(false);
+  expect((await settled).ok).toBe(true);
+  expect(h.calls).toHaveLength(1);
 });
 
 test('target never mounts → completed with presentation degraded TARGET_NOT_FOUND and the success announcement', async () => {

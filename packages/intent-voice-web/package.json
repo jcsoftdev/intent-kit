@@ -1,0 +1,40 @@
+{
+  "name": "@jcsoftdev/intent-voice-web",
+  "version": "0.2.0",
+  "description": "Push-to-talk speech source for the intent kit over the Web Speech API.",
+  "author": "jcsoftdev",
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": false,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jcsoftdev/intent-kit.git",
+    "directory": "packages/intent-voice-web"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json",
+    "prepublishOnly": "node ../../scripts/assert-ci-publish.mjs"
+  },
+  "dependencies": {
+    "@jcsoftdev/intent-core": "workspace:*"
+  },
+  "devDependencies": {
+    "@jcsoftdev/intent-testing": "workspace:*"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

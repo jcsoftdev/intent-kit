@@ -1,6 +1,6 @@
 import { foldText, matchClosedOption } from '@jcsoftdev/intent-core';
 import { describe, expect, test } from 'vitest';
-import { createMatchKey, createNormalizer } from './normalize.js';
+import { createMatchKey, createNormalizer, foldSpanishPlural } from './normalize.js';
 
 const normalize = createNormalizer();
 const matchKey = createMatchKey();
@@ -39,5 +39,34 @@ describe('normalize', () => {
     expect(matchClosedOption('tres leches', options, foldText)?.id).toBe('a');
     expect(matchClosedOption('3 leches', options, foldText)).toBeUndefined();
     expect(matchClosedOption('3 leches', options, matchKey)?.id).toBe('a');
+  });
+});
+
+describe('foldSpanishPlural', () => {
+  test.each([
+    ['lomos', 'lomo'],
+    ['saltados', 'saltado'],
+    ['papas', 'papa'],
+    ['anticuchos', 'anticucho'],
+    ['limones', 'limon'],
+    ['panes', 'pan'],
+    ['jugos', 'jugo'],
+    ['chicharrones', 'chicharron'],
+    ['cafes', 'cafe'],
+    ['mesas', 'mesa'],
+    ['gas', 'gas'],
+    ['mas', 'mas'],
+    ['tres', 'tres'],
+    ['dos', 'dos'],
+    ['lomo', 'lomo'],
+    ['pan', 'pan'],
+    ['arroz', 'arroz'],
+    ['', ''],
+  ])('foldSpanishPlural(%j) is %j', (token, expected) => {
+    expect(foldSpanishPlural(token)).toBe(expected);
+  });
+
+  test('a folded accent word folds the same as its plain form', () => {
+    expect(foldSpanishPlural(foldText('cafés'))).toBe('cafe');
   });
 });
