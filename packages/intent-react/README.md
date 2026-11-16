@@ -10,4 +10,4 @@ pnpm add @jcsoftdev/intent-react @jcsoftdev/intent-core react react-dom
 
 ## License
 
-MIT © jcsoftdev
+Proprietary. Copyright © 2026 jcsoftdev. All rights reserved. See [LICENSE](./LICENSE).

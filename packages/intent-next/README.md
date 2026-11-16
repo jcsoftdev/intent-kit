@@ -10,4 +10,4 @@ pnpm add @jcsoftdev/intent-next @jcsoftdev/intent-core react next
 
 ## License
 
-MIT © jcsoftdev
+Proprietary. Copyright © 2026 jcsoftdev. All rights reserved. See [LICENSE](./LICENSE).

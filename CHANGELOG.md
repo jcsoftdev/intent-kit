@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.1
+
+- Every package is now proprietary: the license changes from MIT to all rights reserved (`UNLICENSED`). Versions 0.1.0 and 0.2.0 were published under MIT.
+
 ## 0.2.0
 
 - Add `@jcsoftdev/intent-dom`, `@jcsoftdev/intent-voice-web`, `@jcsoftdev/intent-react`, `@jcsoftdev/intent-next` and `@jcsoftdev/intent-ui`.

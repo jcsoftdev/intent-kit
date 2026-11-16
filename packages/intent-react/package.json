@@ -1,9 +1,9 @@
 {
   "name": "@jcsoftdev/intent-react",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "React bindings for the intent kit: provider, session and target hooks, and the ui bridge.",
   "author": "jcsoftdev",
-  "license": "MIT",
+  "license": "UNLICENSED",
   "type": "module",
   "sideEffects": false,
   "repository": {

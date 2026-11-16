@@ -32,4 +32,4 @@ Schemas must be closed objects without `$ref` or tuples, and every id-shaped lea
 
 ## License
 
-MIT © jcsoftdev
+Proprietary. Copyright © 2026 jcsoftdev. All rights reserved. See [LICENSE](./LICENSE).

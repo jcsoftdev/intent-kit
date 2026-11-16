@@ -2,7 +2,7 @@
   "name": "intent-kit-root",
   "private": true,
   "author": "jcsoftdev",
-  "license": "MIT",
+  "license": "UNLICENSED",
   "type": "module",
   "packageManager": "pnpm@9.12.2",
   "engines": {

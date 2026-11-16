@@ -23,4 +23,4 @@ Web Speech surface checked against MDN on 2026-11-12: static `SpeechRecognition.
 
 ## License
 
-MIT © jcsoftdev
+Proprietary. Copyright © 2026 jcsoftdev. All rights reserved. See [LICENSE](./LICENSE).

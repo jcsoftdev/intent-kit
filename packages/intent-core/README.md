@@ -77,4 +77,4 @@ await session.submit({ text: 'pedido de arroz con pollo para la mesa 3', source:
 
 ## License
 
-MIT © jcsoftdev
+Proprietary. Copyright © 2026 jcsoftdev. All rights reserved. See [LICENSE](./LICENSE).

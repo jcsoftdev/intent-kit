@@ -1,9 +1,9 @@
 {
   "name": "@jcsoftdev/intent-server",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Server side of the intent kit: turns an utterance into a validated, tenant-scoped plan.",
   "author": "jcsoftdev",
-  "license": "MIT",
+  "license": "UNLICENSED",
   "type": "module",
   "sideEffects": false,
   "repository": {
