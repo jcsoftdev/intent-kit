@@ -39,7 +39,8 @@
   },
   "devDependencies": {
     "@jcsoftdev/intent-testing": "workspace:*",
-    "@jcsoftdev/intent-dom": "workspace:*"
+    "@jcsoftdev/intent-dom": "workspace:*",
+    "@jcsoftdev/ui": "0.10.0"
   },
   "publishConfig": {
     "access": "public"
